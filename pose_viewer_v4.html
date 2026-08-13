@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ESP32-S3 자세 뷰어 v4</title>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --panel: #171a21;
+        --line: #262b36;
+        --ink: #e8eaed;
+        --ink-dim: #9aa0ac;
+        --accent: #ff8c42;
+        --accent2: #4aa3ff;
+        --good: #4ade80;
+        --warn: #fbbf24;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        background: var(--bg);
+        color: var(--ink);
+        font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+        display: flex;
+        height: 100vh;
+        overflow: hidden;
+      }
+      #stage { flex: 1; position: relative; min-width: 0; }
+      #canvas-holder { position: absolute; inset: 0; }
+      .badge {
+        position: absolute; top: 16px; left: 16px;
+        display: flex; align-items: center; gap: 8px;
+        font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+        color: var(--ink-dim);
+      }
+      .dot {
+        width: 8px; height: 8px; border-radius: 50%;
+        background: #555; transition: background 0.2s;
+      }
+      .dot.on { background: var(--good); box-shadow: 0 0 8px var(--good); }
+
+      #panel {
+        width: 350px; background: var(--panel);
+        border-left: 1px solid var(--line);
+        padding: 22px; display: flex; flex-direction: column; gap: 16px;
+        overflow-y: auto; z-index: 10;
+      }
+      h1 { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+      h1 span { color: var(--accent); }
+      .sub { font-size: 12px; color: var(--ink-dim); margin-top: 3px; line-height: 1.5; }
+      .sec-label {
+        font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+        color: var(--ink-dim); margin-bottom: 8px;
+      }
+      .row { display: flex; gap: 8px; }
+      input {
+        flex: 1; padding: 9px 11px; background: #0c0e12;
+        border: 1px solid var(--line); border-radius: 7px;
+        color: var(--ink); font-size: 13px; font-family: inherit;
+      }
+      input:focus { outline: none; border-color: var(--accent2); }
+      button {
+        padding: 9px 14px; border: none; border-radius: 7px; cursor: pointer;
+        font-size: 13px; font-weight: 600; background: #232733; color: var(--ink);
+        font-family: inherit; transition: background 0.15s;
+      }
+      button:hover { background: #2c313f; }
+      button:focus-visible { outline: 2px solid var(--accent2); outline-offset: 2px; }
+      button.on { background: var(--accent); color: #1a1207; }
+      button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+      .cal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+      .cal-btn { position: relative; text-align: left; padding-left: 30px; }
+      .cal-btn::before {
+        content: ""; position: absolute; left: 11px; top: 50%;
+        transform: translateY(-50%);
+        width: 10px; height: 10px; border-radius: 50%;
+        border: 1.5px solid var(--ink-dim);
+      }
+      .cal-btn.done::before {
+        background: var(--good); border-color: var(--good);
+      }
+      .cal-btn.next { background: var(--accent); color: #1a1207; }
+      .cal-btn.next::before { border-color: #1a1207; }
+
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+      .cell {
+        background: #0c0e12; border: 1px solid var(--line);
+        border-radius: 9px; padding: 11px 12px;
+      }
+      .cell .k { font-size: 11px; color: var(--ink-dim); letter-spacing: 0.05em; }
+      .cell .v { font-size: 22px; font-weight: 650; margin-top: 3px; font-variant-numeric: tabular-nums; }
+      .cell .v small { font-size: 13px; color: var(--ink-dim); margin-left: 1px; }
+
+      .arm-tag {
+        padding: 13px; border-radius: 9px; text-align: center;
+        font-size: 18px; font-weight: 700; background: #0c0e12;
+        border: 1px solid var(--line);
+      }
+      .arm-tag.fwd { background: rgba(74, 163, 255, 0.14); border-color: var(--accent2); color: var(--accent2); }
+      .arm-tag.side { background: rgba(255, 140, 66, 0.14); border-color: var(--accent); color: var(--accent); }
+      .arm-tag.diag { background: rgba(251, 191, 36, 0.14); border-color: var(--warn); color: var(--warn); }
+      .arm-tag.rest { background: rgba(74, 222, 128, 0.12); border-color: var(--good); color: var(--good); }
+
+      .sensor {
+        display: flex; align-items: center; gap: 9px;
+        padding: 7px 11px; background: #0c0e12;
+        border: 1px solid var(--line); border-radius: 7px;
+        margin-bottom: 5px; font-size: 12px;
+      }
+      .sensor .sdot {
+        width: 8px; height: 8px; border-radius: 50%; background: #3a3f4b; flex: none;
+      }
+      .sensor.live .sdot { background: var(--good); box-shadow: 0 0 6px var(--good); }
+      .sensor.stale .sdot { background: var(--warn); }
+      .sensor .sname { flex: 1; letter-spacing: 0.03em; }
+      .sensor .srate { color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+      .sensor.stale .srate { color: var(--warn); }
+      .sensor.dead .sname, .sensor.dead .srate { color: #5a606c; }
+
+      .status {
+        font-size: 12px; color: var(--ink-dim); line-height: 1.5;
+        background: #0c0e12; border: 1px solid var(--line);
+        border-radius: 7px; padding: 9px 11px;
+      }
+      .status.warn { color: var(--warn); border-color: rgba(251, 191, 36, 0.35); }
+      hr { border: none; border-top: 1px solid var(--line); }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <div id="canvas-holder"></div>
+      <div class="badge"><div class="dot" id="dot"></div><span id="conn-text">연결 안 됨</span></div>
+    </div>
+
+    <aside id="panel">
+      <div>
+        <h1>오른팔 <span>자세 추적</span></h1>
+        <p class="sub">서버 v4.0. 방위각은 앞=0°, 옆=+° 이며 교정에서 잡은 기준을 씁니다.</p>
+      </div>
+
+      <div class="row">
+        <input id="ws-url" value="ws://localhost:8765" aria-label="서버 주소" />
+        <button id="btn-conn" onclick="toggleConn()">연결</button>
+      </div>
+
+      <div>
+        <div class="sec-label">교정 (순서대로)</div>
+        <div class="cal-grid">
+          <button class="cal-btn" id="cal-rest" onclick="sendZero()">1 차렷</button>
+          <button class="cal-btn" id="cal-twist" onclick="sendTwist()">2 팔 비틀기</button>
+          <button class="cal-btn" id="cal-fwd" onclick="sendCal('forward')">3 앞으로 90°</button>
+          <button class="cal-btn" id="cal-side" onclick="sendCal('side')">4 옆으로 90°</button>
+          <button class="cal-btn" id="cal-diag" onclick="sendCal('diag')">5 대각선 45°</button>
+          <button class="cal-btn" id="cal-anchor" onclick="sendAnchor()">앵커 다시</button>
+        </div>
+        <p class="sub">2번은 누른 뒤 3초간 팔을 내린 채 손바닥을 안팎으로 크게 비트세요. 5번까지 다 해야 손목 자세와 무관하게 맞습니다. 교정 후에는 3번만 다시 눌러 앞 방향을 빠르게 재조정할 수 있습니다.</p>
+      </div>
+
+      <div>
+        <div class="sec-label">9축 센서 연결</div>
+        <div id="sensors">
+          <div class="sensor"><span class="sdot"></span><span class="sname">R_SHOULDER</span><span class="srate">–</span></div>
+          <div class="sensor"><span class="sdot"></span><span class="sname">R_UPPERARM</span><span class="srate">–</span></div>
+          <div class="sensor"><span class="sdot"></span><span class="sname">R_FOREARM</span><span class="srate">–</span></div>
+        </div>
+      </div>
+
+      <div class="status" id="status">서버 연결을 기다리는 중</div>
+
+      <div class="arm-tag" id="val-pose">연결 대기</div>
+
+      <div class="grid">
+        <div class="cell"><div class="k">거상각 ELEV</div><div class="v" id="val-elev">–</div></div>
+        <div class="cell"><div class="k">방위각 AZ</div><div class="v" id="val-az">–</div></div>
+        <div class="cell"><div class="k">팔꿈치 FLEX</div><div class="v" id="val-flex">–</div></div>
+        <div class="cell"><div class="k">앞→옆 폭</div><div class="v" id="val-span">–</div></div>
+        <div class="cell"><div class="k">드리프트 보정</div><div class="v" id="val-drift">–</div></div>
+        <div class="cell"><div class="k">앵커</div><div class="v" id="val-anchor" style="font-size:15px">대기</div></div>
+      </div>
+
+      <hr />
+
+      <div>
+        <div class="sec-label">데이터 기록</div>
+        <div class="row">
+          <input id="log-label" value="앞으로90_손바닥몸쪽" aria-label="자세 이름" />
+          <button id="btn-rec" onclick="toggleRec()">기록</button>
+        </div>
+        <div class="row" style="margin-top: 7px">
+          <button style="flex: 1" onclick="downloadCsv()">CSV 저장</button>
+          <button style="flex: 1" onclick="clearLog()">비우기</button>
+        </div>
+        <p class="sub" id="log-count">0행 기록됨</p>
+      </div>
+    </aside>
+
+    <script type="importmap">
+      { "imports": { "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js" } }
+    </script>
+    <script type="module">
+      import * as THREE from "three";
+
+      // ── 좌표 약속 ────────────────────────────────────────────
+      //  모델은 카메라(+z) 쪽을 바라본다.
+      //  ANT  = (0,0,1)   앞      -> 방위각 0도
+      //  LAT  = (-1,0,0)  오른팔의 바깥쪽 -> 방위각 +90도
+      //  DOWN = (0,-1,0)  차렷    -> 거상각 0도
+      //  서버의 az 정의(앞=0, 옆=+)와 정확히 일치시킨 것이 v3 뷰어와 다른 점이다.
+      const ANT = new THREE.Vector3(0, 0, 1);
+      const LAT = new THREE.Vector3(-1, 0, 0);
+      const DOWN = new THREE.Vector3(0, -1, 0);
+
+      const holder = document.getElementById("canvas-holder");
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0f1115);
+      const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      holder.appendChild(renderer.domElement);
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+      const key = new THREE.DirectionalLight(0xffffff, 0.9);
+      key.position.set(3, 6, 4);
+      scene.add(key);
+      const rim = new THREE.DirectionalLight(0x4aa3ff, 0.3);
+      rim.position.set(-4, 2, -3);
+      scene.add(rim);
+
+      const grid = new THREE.GridHelper(6, 12, 0x2a3040, 0x1c212b);
+      grid.position.y = -1.8;
+      scene.add(grid);
+
+      const root = new THREE.Group();
+      scene.add(root);
+
+      const torso = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.28, 1.1, 6, 16),
+        new THREE.MeshStandardMaterial({ color: 0x4ade80, roughness: 0.6, metalness: 0.1 }),
+      );
+      torso.position.y = 0.15;
+      root.add(torso);
+
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(0.19, 20, 16),
+        new THREE.MeshStandardMaterial({ color: 0x2f3742, roughness: 0.7 }),
+      );
+      head.position.y = 1.05;
+      root.add(head);
+
+      // 코: 어느 쪽이 앞인지 눈으로 확인할 수 있게 (+z 가 앞)
+      const nose = new THREE.Mesh(
+        new THREE.ConeGeometry(0.05, 0.13, 12),
+        new THREE.MeshStandardMaterial({ color: 0xff8c42, roughness: 0.5 }),
+      );
+      nose.position.set(0, 1.02, 0.19);
+      nose.rotation.x = Math.PI / 2;
+      root.add(nose);
+
+      // 오른팔 (모델이 +z 를 보므로 오른쪽 어깨는 -x)
+      const UPPER_LEN = 0.62;
+      const FORE_LEN = 0.55;
+      const armMat = new THREE.MeshStandardMaterial({ color: 0x4aa3ff, roughness: 0.45, metalness: 0.1 });
+      const foreMat = new THREE.MeshStandardMaterial({ color: 0xff8c42, roughness: 0.45, metalness: 0.1 });
+      const jointMat = new THREE.MeshStandardMaterial({ color: 0x9aa0ac, roughness: 0.4 });
+
+      const shoulder = new THREE.Group();
+      shoulder.position.set(-0.4, 0.62, 0);
+      root.add(shoulder);
+      shoulder.add(new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 12), jointMat));
+
+      const upperPivot = new THREE.Group();
+      shoulder.add(upperPivot);
+      const upperArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, UPPER_LEN, 6, 14), armMat);
+      upperArm.position.y = -UPPER_LEN / 2;
+      upperPivot.add(upperArm);
+
+      const elbow = new THREE.Group();
+      elbow.position.y = -UPPER_LEN;
+      upperPivot.add(elbow);
+      elbow.add(new THREE.Mesh(new THREE.SphereGeometry(0.075, 16, 12), jointMat));
+
+      const forePivot = new THREE.Group();
+      elbow.add(forePivot);
+      const foreArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.07, FORE_LEN, 6, 14), foreMat);
+      foreArm.position.y = -FORE_LEN / 2;
+      forePivot.add(foreArm);
+
+      const targetUpper = new THREE.Quaternion();
+      const targetFore = new THREE.Quaternion();
+
+      // 서버의 (elev, az, flex) -> 팔 방향
+      function applyPose(elev, az, flex) {
+        const e = THREE.MathUtils.degToRad(elev || 0);
+        const a = THREE.MathUtils.degToRad(az || 0);
+
+        // 거상각만큼 눕히고, 방위각만큼 앞/옆으로 돌린 방향
+        const dir = new THREE.Vector3()
+          .addScaledVector(ANT, Math.sin(e) * Math.cos(a))
+          .addScaledVector(LAT, Math.sin(e) * Math.sin(a))
+          .addScaledVector(DOWN, Math.cos(e))
+          .normalize();
+        targetUpper.setFromUnitVectors(DOWN, dir);
+
+        // 팔꿈치 굴곡축 = 차렷일 때 LAT 인 축을 상완과 함께 돌린 것.
+        // 팔이 어디를 향하든 손이 팔 안쪽으로 접히고, 특이점이 없다.
+        const axis = LAT.clone().applyQuaternion(targetUpper).normalize();
+        const foreDir = dir.clone().applyAxisAngle(axis, THREE.MathUtils.degToRad(flex || 0));
+        const foreWorld = new THREE.Quaternion().setFromUnitVectors(DOWN, foreDir);
+        targetFore.copy(targetUpper).invert().multiply(foreWorld);
+      }
+      applyPose(0, 0, 0);
+
+      let camTarget = new THREE.Vector3(0, 0, 0);
+      const views = {
+        front: new THREE.Vector3(0, 0.3, 5),
+        side: new THREE.Vector3(5, 0.3, 0.001),
+        iso: new THREE.Vector3(3.4, 1.8, 3.8),
+      };
+      let camPos = views.iso.clone();
+      window.setView = (v) => { camPos = views[v].clone(); };
+
+      function resize() {
+        const w = holder.clientWidth, h = holder.clientHeight;
+        renderer.setSize(w, h);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+      }
+      window.addEventListener("resize", resize);
+      resize();
+
+      let dragging = false, px = 0, orbit = 0;
+      holder.addEventListener("pointerdown", (e) => { dragging = true; px = e.clientX; });
+      window.addEventListener("pointerup", () => (dragging = false));
+      window.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        orbit += (e.clientX - px) * 0.01;
+        px = e.clientX;
+      });
+
+      function animate() {
+        requestAnimationFrame(animate);
+        upperPivot.quaternion.slerp(targetUpper, 0.18);
+        forePivot.quaternion.slerp(targetFore, 0.18);
+        const r = camPos.clone();
+        const c = Math.cos(orbit), s = Math.sin(orbit);
+        camera.position.lerp(new THREE.Vector3(r.x * c - r.z * s, r.y, r.x * s + r.z * c), 0.12);
+        camera.lookAt(camTarget);
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      // ── 통신 ─────────────────────────────────────────────────
+      let ws = null;
+      const $ = (id) => document.getElementById(id);
+
+      window.toggleConn = () => {
+        if (ws && ws.readyState <= 1) { ws.close(); return; }
+        ws = new WebSocket($("ws-url").value);
+        ws.onopen = () => {
+          $("dot").classList.add("on");
+          $("conn-text").textContent = "연결됨";
+          $("btn-conn").textContent = "해제";
+          $("btn-conn").classList.add("on");
+        };
+        ws.onclose = () => {
+          $("dot").classList.remove("on");
+          $("conn-text").textContent = "연결 안 됨";
+          $("btn-conn").textContent = "연결";
+          $("btn-conn").classList.remove("on");
+          $("val-pose").textContent = "연결 대기";
+          $("val-pose").className = "arm-tag";
+          $("status").textContent = "서버 연결이 끊겼습니다. 주소를 확인하고 다시 연결하세요.";
+        };
+        ws.onerror = () => {
+          $("status").textContent = "연결할 수 없습니다. 서버가 실행 중인지, 주소가 맞는지 확인하세요.";
+          $("status").classList.add("warn");
+        };
+        ws.onmessage = (evt) => {
+          let d;
+          try { d = JSON.parse(evt.data); } catch { return; }
+          update(d);
+        };
+      };
+
+      const send = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+      window.sendZero = () => send({ cmd: "zero" });
+      window.sendCal = (pose) => send({ cmd: "cal", pose });
+      window.sendTwist = () => send({ cmd: "twist" });
+      window.sendAnchor = () => send({ cmd: "anchor" });
+
+      const POSE_CLASS = {
+        "REST": "rest",
+        "앞으로 90도": "fwd",
+        "옆으로 90도": "side",
+        "대각선 90도": "diag",
+      };
+
+      let lastQuat = null;
+
+      function update(d) {
+        lastQuat = d.quat || null;
+
+        $("val-elev").innerHTML = fmt(d.elev);
+        $("val-az").innerHTML = fmt(d.az);
+        $("val-flex").innerHTML = d.flex == null ? "–" : fmt(d.flex);
+        $("val-span").innerHTML = d.az_side == null ? "–" : fmt(d.az_side);
+
+        const tag = $("val-pose");
+        tag.textContent = d.pose === "REST" ? "차렷 (REST)" : d.pose;
+        tag.className = "arm-tag " + (POSE_CLASS[d.pose] || "");
+
+        const c = d.calib || {};
+        setCal("cal-rest", c.rest, !c.rest);
+        setCal("cal-twist", c.twist, c.rest && !c.twist);
+        setCal("cal-fwd", c.fwd, c.rest && c.twist && !c.fwd);
+        setCal("cal-side", c.side, c.rest && c.fwd && !c.side);
+        setCal("cal-diag", c.diag, c.side && !c.diag);
+        setCal("cal-anchor", c.anchor, false);
+
+        renderSensors(d.sensors);
+        $("val-drift").innerHTML = d.drift == null ? "–" : (d.drift > 0 ? "+" : "") + fmt(d.drift);
+        $("val-anchor").textContent = !c.anchor
+          ? "대기"
+          : d.anchor_age == null ? "설정됨" : d.anchor_age + "초 전";
+
+        const st = $("status");
+        st.textContent = d.status === "OK" ? statusLine(d) : d.status;
+        st.classList.toggle(
+          "warn",
+          d.status !== "OK" || d.twisting || (d.cal_age ?? 0) >= 180,
+        );
+
+        // 그릴 때만 방위각을 편다.
+        // 어깨(견갑골)센서가 팔 움직임의 일부를 같이 먹어서 앞->옆 폭이
+        // 해부학적 90도가 아니라 50도 근처로 압축돼 나온다. 판별은 그 폭 안에서
+        // 비율로 하므로 문제가 없지만, 그대로 그리면 팔이 앞쪽으로 말려 보인다.
+        const span = d.az_side;
+        const k = span && span > 15 ? Math.min(3, 90 / span) : 1;
+        if (d.status === "OK" && c.rest) applyPose(d.elev, (d.az || 0) * k, d.flex || 0);
+        if (recording && lastQuat && lastQuat.sh && lastQuat.ua) pushRow(d);
+      }
+
+      // 서버가 매 0.1초 보내주는 센서 현황을 그대로 그린다.
+      function renderSensors(list) {
+        if (!list) return;
+        const box = $("sensors");
+        box.innerHTML = list
+          .map((s) => {
+            const cls = s.ok ? "live" : s.age == null ? "dead" : "stale";
+            const rate = s.ok
+              ? s.hz.toFixed(1) + " Hz"
+              : s.age == null
+                ? "수신 없음"
+                : s.age.toFixed(1) + "초 전";
+            const warn = s.known ? "" : " ⚠ 미등록 ID";
+            return `<div class="sensor ${cls}"><span class="sdot"></span><span class="sname">${s.id}${warn}</span><span class="srate">${rate}</span></div>`;
+          })
+          .join("");
+      }
+
+      function statusLine(d) {
+        // yaw 드리프트는 시간에 비례해 쌓인다. 경과를 계속 보여줘서
+        // 언제 앞 방향을 다시 잡아야 할지 알 수 있게 한다.
+        if (d.drift != null && Math.abs(d.drift) > 0.05)
+          return `드리프트 ${d.drift > 0 ? "+" : ""}${d.drift.toFixed(1)}° 자동 보정 중 · 수평성분 ${(d.mag ?? 0).toFixed(2)}`;
+        if (d.cal_age != null) {
+          const m = Math.floor(d.cal_age / 60);
+          if (d.cal_age >= 180)
+            return `교정 후 ${m}분 경과 · 방위각이 흘렀을 수 있습니다. 앞으로 뻗고 2번을 다시 누르세요`;
+          return `교정 후 ${m}분 ${d.cal_age % 60}초 · 수평성분 ${(d.mag ?? 0).toFixed(2)}`;
+        }
+        const drift = d.flex_drift > 5 ? ` · 팔꿈치 드리프트 ≥${d.flex_drift.toFixed(0)}°` : "";
+        return `수평성분 ${(d.mag ?? 0).toFixed(2)}${drift}`;
+      }
+
+      const fmt = (v) => (v == null ? "–" : v.toFixed(1) + "<small>°</small>");
+
+      function setCal(id, done, next) {
+        const b = $(id);
+        b.classList.toggle("done", !!done);
+        b.classList.toggle("next", !!next);
+      }
+
+      // ── CSV 기록 (서버가 원본 쿼터니언을 함께 보내준다) ──────
+      const HEADER = "pose,elev,az,flex,mag,sh_w,sh_x,sh_y,sh_z,ua_w,ua_x,ua_y,ua_z,fa_w,fa_x,fa_y,fa_z";
+      let rows = [];
+      let recording = false;
+
+      window.toggleRec = () => {
+        recording = !recording;
+        const b = $("btn-rec");
+        b.textContent = recording ? "정지" : "기록";
+        b.classList.toggle("on", recording);
+      };
+
+      function pushRow(d) {
+        const q = d.quat;
+        const fa = q.fa || [0, 0, 0, 0];
+        rows.push([
+          $("log-label").value,
+          d.elev, d.az, d.flex ?? "", d.mag,
+          ...q.sh, ...q.ua, ...fa,
+        ].join(","));
+        $("log-count").textContent = rows.length + "행 기록됨";
+      }
+
+      window.clearLog = () => {
+        rows = [];
+        $("log-count").textContent = "0행 기록됨";
+      };
+
+      window.downloadCsv = () => {
+        if (!rows.length) {
+          $("status").textContent = "기록된 행이 없습니다. '기록'을 누르고 자세를 잡으세요.";
+          $("status").classList.add("warn");
+          return;
+        }
+        const blob = new Blob(["\ufeff" + HEADER + "\n" + rows.join("\n")], {
+          type: "text/csv;charset=utf-8",
+        });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "debug_data_" + new Date().toISOString().slice(0, 10) + ".csv";
+        a.click();
+        URL.revokeObjectURL(a.href);
+      };
+    </script>
+  </body>
+</html>
