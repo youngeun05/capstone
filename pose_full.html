@@ -1,0 +1,1480 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>모션캡처 스튜디오 · 양팔</title>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --panel: #171a21;
+        --line: #262b36;
+        --ink: #e8eaed;
+        --ink-dim: #9aa0ac;
+        --accent: #ff8c42;
+        --accent2: #4aa3ff;
+        --good: #4ade80;
+        --warn: #fbbf24;
+        --bad: #f87171;
+        --armL: #ff8c42;
+        --armR: #4aa3ff;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        background: var(--bg);
+        color: var(--ink);
+        font-family: "Inter", "Pretendard", "Segoe UI", system-ui, sans-serif;
+        display: flex;
+        height: 100vh;
+        overflow: hidden;
+      }
+      #stage { flex: 1; position: relative; min-width: 0; }
+      #canvas-holder { position: absolute; inset: 0; }
+      .badge {
+        position: absolute; top: 16px; left: 16px;
+        display: flex; align-items: center; gap: 8px;
+        font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+        color: var(--ink-dim); pointer-events: none;
+      }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; transition: background .2s; }
+      .dot.on { background: var(--good); box-shadow: 0 0 8px var(--good); }
+
+      .viewbtns { position: absolute; top: 14px; right: 16px; display: flex; gap: 6px; }
+      .viewbtns button { padding: 6px 11px; font-size: 12px; }
+
+      /* 화면 위 판정 오버레이 */
+      .tags { position: absolute; bottom: 18px; left: 16px; display: flex; gap: 10px; }
+      .tag {
+        background: rgba(23,26,33,.86); border: 1px solid var(--line);
+        border-radius: 10px; padding: 9px 14px; min-width: 158px;
+      }
+      .tag .who { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-dim); }
+      .tag .ps { font-size: 19px; font-weight: 650; letter-spacing: -.01em; margin-top: 2px; }
+      .tag .mt { font-size: 11px; color: var(--ink-dim); font-variant-numeric: tabular-nums; margin-top: 3px; }
+      .tag.dead { opacity: .38; }
+      .tag.L .ps { color: var(--armL); }
+      .tag.R .ps { color: var(--armR); }
+
+      /* 녹화 중 표시 */
+      .reclamp {
+        position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+        display: none; align-items: center; gap: 9px;
+        background: rgba(248,113,113,.14); border: 1px solid rgba(248,113,113,.5);
+        color: #fecaca; border-radius: 999px; padding: 7px 16px;
+        font-size: 13px; font-variant-numeric: tabular-nums;
+      }
+      .reclamp.on { display: flex; }
+      .reclamp i { width: 9px; height: 9px; border-radius: 50%; background: var(--bad);
+        animation: blink 1s infinite; }
+      @keyframes blink { 50% { opacity: .25 } }
+
+      #panel {
+        width: 366px; background: var(--panel);
+        border-left: 1px solid var(--line);
+        padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        overflow-y: auto; z-index: 10;
+      }
+      h1 { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+      h1 span { color: var(--accent); }
+      .sub { font-size: 12px; color: var(--ink-dim); margin-top: 3px; line-height: 1.55; }
+      .sec-label {
+        font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+        color: var(--ink-dim); margin-bottom: 8px;
+      }
+      .row { display: flex; gap: 8px; }
+      input, select {
+        flex: 1; padding: 9px 11px; background: #0c0e12;
+        border: 1px solid var(--line); border-radius: 7px;
+        color: var(--ink); font-size: 13px; font-family: inherit; min-width: 0;
+      }
+      button {
+        padding: 9px 14px; background: #1e222b; border: 1px solid var(--line);
+        border-radius: 7px; color: var(--ink); font-size: 13px; font-family: inherit;
+        cursor: pointer; transition: background .15s, border-color .15s, color .15s;
+      }
+      button:hover:not(:disabled) { background: #262b36; border-color: #3a4150; }
+      button:disabled { opacity: .4; cursor: not-allowed; }
+      button.on { background: var(--accent); border-color: var(--accent); color: #22160a; font-weight: 600; }
+      button.rec { background: var(--bad); border-color: var(--bad); color: #2a0c0c; font-weight: 600; }
+      :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+      /* 팔 탭 */
+      .armtabs { display: flex; gap: 7px; }
+      .armtabs button { flex: 1; }
+      .armtabs button.selL { background: rgba(255,140,66,.16); border-color: var(--armL); color: var(--armL); font-weight: 600; }
+      .armtabs button.selR { background: rgba(74,163,255,.16); border-color: var(--armR); color: var(--armR); font-weight: 600; }
+
+      .cal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+      .cal-btn { font-size: 12.5px; padding: 10px 8px; text-align: left; position: relative; }
+      .cal-btn.done { border-color: var(--good); color: var(--good); background: rgba(74,222,128,.08); }
+      .cal-btn.done::after { content: "✓"; position: absolute; right: 9px; top: 50%; transform: translateY(-50%); }
+      .cal-btn.next { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 1px rgba(255,140,66,.25); }
+
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .cell { background: #0c0e12; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; }
+      .cell .k { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-dim); }
+      .cell .v { font-size: 19px; font-weight: 620; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.35; }
+      .cell .v small { font-size: 11px; color: var(--ink-dim); font-weight: 400; margin-left: 1px; }
+      .cell.wide { grid-column: 1 / -1; }
+      .cell.alert .v { color: var(--warn); }
+
+      .sensor { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; }
+      .sensor + .sensor { border-top: 1px solid rgba(38,43,54,.6); }
+      .sdot { width: 7px; height: 7px; border-radius: 50%; background: #555; flex: none; }
+      .sensor.live .sdot { background: var(--good); }
+      .sensor.stale .sdot { background: var(--warn); }
+      .sensor.dead .sdot { background: var(--bad); }
+      .sname { flex: 1; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+      .sensor.live .sname { color: var(--ink); }
+      .srate { color: var(--ink-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+      .status {
+        font-size: 12px; color: var(--ink-dim); line-height: 1.55;
+        background: #0c0e12; border: 1px solid var(--line);
+        border-radius: 8px; padding: 9px 11px;
+      }
+      .status.warn { border-color: rgba(251,191,36,.45); color: var(--warn); }
+      hr { border: none; border-top: 1px solid var(--line); }
+      .count { font-size: 30px; font-weight: 700; text-align: center;
+        color: var(--accent); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+      .bar { height: 3px; background: #0c0e12; border-radius: 2px; overflow: hidden; margin-top: 6px; }
+      .bar > i { display: block; height: 100%; width: 0%; background: var(--bad); transition: width .1s linear; }
+      table.sum { width: 100%; border-collapse: collapse; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+      table.sum th { color: var(--ink-dim); font-weight: 500; font-size: 10px; letter-spacing: .06em;
+        text-align: right; padding: 4px 3px; border-bottom: 1px solid var(--line); }
+      table.sum th:first-child, table.sum td:first-child { text-align: left; }
+      table.sum td { text-align: right; padding: 4px 3px; border-bottom: 1px solid rgba(38,43,54,.55); }
+      table.sum tr.bad td { color: var(--bad); }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <div id="canvas-holder"></div>
+      <div class="badge"><span class="dot" id="dot"></span><span id="conn-text">연결 안 됨</span></div>
+      <div class="viewbtns">
+        <button onclick="setView('front')">정면</button>
+        <button onclick="setView('top')">위에서</button>
+        <button onclick="setView('side')">옆에서</button>
+        <button onclick="setView('iso')" class="on" id="btn-iso">비스듬히</button>
+      </div>
+      <div class="reclamp" id="reclamp"><i></i><span id="rec-text">기록 중</span></div>
+      <div class="tags">
+        <div class="tag L" id="tag-L">
+          <div class="who">왼팔</div>
+          <div class="ps" id="pose-L">연결 대기</div>
+          <div class="mt" id="mt-L">–</div>
+        </div>
+        <div class="tag R" id="tag-R">
+          <div class="who">오른팔</div>
+          <div class="ps" id="pose-R">연결 대기</div>
+          <div class="mt" id="mt-R">–</div>
+        </div>
+      </div>
+    </div>
+
+    <aside id="panel">
+      <div>
+        <h1>모션캡처 <span>스튜디오</span></h1>
+        <p class="sub">양팔 6축 · 앞/옆/대각 교정과 데이터 수집을 한 화면에서 합니다.</p>
+      </div>
+
+      <div>
+        <div class="sec-label">서버</div>
+        <div class="row">
+          <input id="ws-url" value="ws://192.168.0.10:8765" aria-label="상체 서버 주소" />
+          <button id="btn-conn" onclick="toggleConn()">연결</button>
+        </div>
+        <p class="sub" style="margin-top:4px">상체(양팔) 서버 · v6</p>
+        <div class="row" style="margin-top:7px">
+          <input id="ws-url-low" value="ws://localhost:8766" aria-label="하체 서버 주소" />
+          <button id="btn-conn-low" onclick="toggleConnLow()">연결</button>
+        </div>
+        <p class="sub" style="margin-top:4px">
+          하체(무릎·고관절·허리) 서버 · 기본 포트 8766.
+          <b>두 서버는 포트가 달라야 합니다.</b>
+        </p>
+      </div>
+
+      <hr />
+
+      <div>
+        <div class="sec-label">교정할 팔</div>
+        <div class="armtabs">
+          <button id="tab-L" class="selL" onclick="setArm('L')">왼팔 <span id="tab-st-L"></span></button>
+          <button id="tab-R" onclick="setArm('R')">오른팔 <span id="tab-st-R"></span></button>
+        </div>
+      </div>
+
+      <div>
+        <div class="sec-label">교정 · <span id="cal-who">왼팔</span></div>
+        <div class="cal-grid">
+          <button class="cal-btn" id="cal-rest" onclick="sendCal('zero')">1 차렷 영점</button>
+          <button class="cal-btn" id="cal-fwd" onclick="sendCal('cal','forward')">2 앞으로 90°</button>
+          <button class="cal-btn" id="cal-side" onclick="sendCal('cal','side')">3 옆으로 90°</button>
+          <button class="cal-btn" id="cal-diag" onclick="sendCal('cal','diag')">4 대각선</button>
+          <button class="cal-btn" id="cal-elbow" onclick="sendCal('elbow')">팔꿈치 영점</button>
+          <button class="cal-btn" id="cal-anchor" onclick="sendCal('anchor')">앵커 다시</button>
+        </div>
+        <div class="row" style="margin-top:7px">
+          <button style="flex:1" onclick="sendCal('reset')">이 팔 교정 초기화</button>
+        </div>
+        <p class="sub">1→2→3→4 순서로, <b>팔마다 따로</b> 잡습니다. 각 자세를 잡고 <b>멈춘 상태에서</b>
+          누르세요 (움직이는 중이면 서버가 거부합니다). 4번까지 끝내면 팔을 내리고 1초 정지해
+          앵커를 잡습니다.</p>
+      </div>
+
+      <hr />
+
+      <div>
+        <div class="sec-label">지표 · <span id="val-who">왼팔</span></div>
+        <div class="grid">
+          <div class="cell"><div class="k">거상각 ELEV</div><div class="v" id="val-elev">–</div></div>
+          <div class="cell"><div class="k">방위각 AZ</div><div class="v" id="val-az">–</div></div>
+          <div class="cell"><div class="k">팔꿈치 (180=폄)</div><div class="v" id="val-flex">–</div></div>
+          <div class="cell"><div class="k">수평성분 MAG</div><div class="v" id="val-mag">–</div></div>
+          <div class="cell" id="cell-margin"><div class="k">경계 여유</div><div class="v" id="val-margin">–</div></div>
+          <div class="cell"><div class="k">드리프트 보정</div><div class="v" id="val-drift">–</div></div>
+          <div class="cell"><div class="k">몸통 기울기</div><div class="v" id="val-tilt">–</div></div>
+          <div class="cell"><div class="k">앵커</div><div class="v" id="val-anchor" style="font-size:14px">대기</div></div>
+          <div class="cell wide"><div class="k">기준각 앞 / 대각 / 옆</div><div class="v" id="val-ref" style="font-size:15px">교정 전</div></div>
+          <div class="cell wide"><div class="k">판정 구간</div><div class="v" id="val-band" style="font-size:14px">교정 전</div></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="sec-label">센서</div>
+        <div id="sensors">
+          <div class="sensor"><span class="sdot"></span><span class="sname">연결 대기</span><span class="srate">–</span></div>
+        </div>
+      </div>
+
+      <div class="status" id="status">서버 연결을 기다리는 중</div>
+
+      <hr />
+
+      <hr />
+
+      <div>
+        <div class="sec-label">하체 · 교정</div>
+        <div class="row">
+          <button style="flex:1" onclick="sendLow('zero')">직립 자세에서 영점</button>
+        </div>
+        <p class="sub" style="margin-top:6px">다리를 편 채 똑바로 서서 누르세요.
+          무릎·고관절·허리 기준이 한 번에 잡힙니다. 앞뒤 구분(부호)은 영점 뒤
+          몸을 20° 이상 움직이면 자동으로 학습됩니다.</p>
+      </div>
+
+      <div>
+        <div class="sec-label">하체 · 지표</div>
+        <div class="grid">
+          <div class="cell"><div class="k">오른 무릎</div><div class="v" id="lv-knee-R">–</div></div>
+          <div class="cell"><div class="k">왼 무릎</div><div class="v" id="lv-knee-L">–</div></div>
+          <div class="cell"><div class="k">오른 고관절</div><div class="v" id="lv-hip-R">–</div></div>
+          <div class="cell"><div class="k">왼 고관절</div><div class="v" id="lv-hip-L">–</div></div>
+          <div class="cell"><div class="k">골반 숙임</div><div class="v" id="lv-pelvis">–</div></div>
+          <div class="cell"><div class="k">허리 굽힘</div><div class="v" id="lv-lumbar">–</div></div>
+        </div>
+        <div class="status" id="low-status" style="margin-top:8px">하체 서버 연결 대기</div>
+      </div>
+
+      <hr />
+
+      <div>
+        <div class="sec-label">운동 자세 검증</div>
+        <div class="row">
+          <select id="pose-select" aria-label="검증할 자세"></select>
+          <button id="pose-toggle" onclick="togglePoseCheck()">시작</button>
+        </div>
+        <div class="row" style="margin-top:7px">
+          <input id="pose-new-name" placeholder="새 자세 이름" style="flex:1" />
+          <button onclick="addPose()">추가</button>
+          <button onclick="deletePose()">삭제</button>
+        </div>
+
+        <div id="pose-overall" style="display:none;text-align:center;padding:10px;
+             border-radius:9px;margin-top:9px;font-size:15px;font-weight:700"></div>
+
+        <div id="pose-rows" style="margin-top:8px"></div>
+
+        <div style="margin-top:11px;border-top:1px solid var(--line);padding-top:9px">
+          <div class="sec-label">정자세 목표 각도 · <span id="pose-edit-who">–</span></div>
+          <div id="pose-editor"></div>
+          <div class="row" style="margin-top:8px">
+            <button style="flex:1" onclick="savePoseDefs(this)">저장</button>
+            <button style="flex:1" onclick="capturePose()">현재 자세로 목표 설정</button>
+            <button style="flex:1" onclick="resetPoseDefs()">기본값</button>
+          </div>
+          <p class="sub" style="margin-top:7px">
+            부위별 <b>목표 각도</b>와 <b>허용 오차(±)</b>를 정합니다. 측정값이 범위 안이면
+            <b style="color:var(--good)">정상</b>, 밖이면 <b style="color:var(--warn)">벗어남</b>.
+            아직 안 쓰는 부위는 <b>사용</b>을 꺼두면 판정에서 빠집니다.
+            <b>현재 자세로 목표 설정</b>을 누르면 지금 측정값이 그대로 목표가 됩니다.
+            저장하면 이 브라우저에 남습니다.
+          </p>
+        </div>
+      </div>
+
+      <hr />
+
+      <div>
+        <div class="sec-label">데이터 수집</div>
+        <div class="row">
+          <select id="log-label" aria-label="자세 이름">
+            <option>앞으로90</option>
+            <option>옆으로90</option>
+            <option>대각선90</option>
+            <option>차렷</option>
+            <option>뒤로</option>
+            <option>자유동작</option>
+          </select>
+          <select id="log-dur" aria-label="녹화 길이" style="max-width:104px">
+            <option value="5">5초</option>
+            <option value="10" selected>10초</option>
+            <option value="20">20초</option>
+            <option value="0">수동</option>
+          </select>
+        </div>
+        <div class="row" style="margin-top:7px">
+          <button style="flex:1" id="mode-L" onclick="setMode('L')">왼팔만</button>
+          <button style="flex:1" id="mode-R" onclick="setMode('R')">오른팔만</button>
+          <button style="flex:1" id="mode-BOTH" class="on" onclick="setMode('BOTH')">양팔</button>
+        </div>
+        <div class="count" id="count" style="margin-top:9px">준비</div>
+        <div class="bar"><i id="recbar"></i></div>
+        <div class="row" style="margin-top:9px">
+          <button style="flex:1" id="btn-rec" onclick="toggleRec()" disabled>3초 뒤 기록</button>
+          <button style="flex:1" onclick="undoTrial()" id="btn-undo" disabled>직전 시도 취소</button>
+        </div>
+        <div class="row" style="margin-top:7px">
+          <button style="flex:1" onclick="downloadCsv()" id="btn-csv" disabled>CSV 저장</button>
+          <button style="flex:1" onclick="clearLog()" id="btn-clear" disabled>비우기</button>
+        </div>
+        <p class="sub" id="log-count">0행 기록됨</p>
+        <table class="sum" id="sum-tbl"></table>
+      </div>
+    </aside>
+
+    <script type="importmap">
+      { "imports": { "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js" } }
+    </script>
+    <script type="module">
+      import * as THREE from "three";
+
+      /* ═══════════════════════════════════════════════════════════
+         좌표 약속
+           모델은 카메라(+z) 쪽을 바라본다.
+           ANT  = (0,0,1)  앞      -> 방위각 0도
+           DOWN = (0,-1,0) 차렷    -> 거상각 0도
+           바깥쪽(LAT)은 팔마다 반대다. 사람이 +z 를 볼 때 그 사람의 오른쪽은 -x.
+             오른팔 LAT = (-1,0,0),  왼팔 LAT = (+1,0,0)
+           서버의 az_side 는 e_lat 을 '옆으로' 관측값에서 만들기 때문에 팔에 상관없이
+           양수로 나온다. 그래서 좌우 구분은 여기서 준다.
+         ═══════════════════════════════════════════════════════════ */
+      const ANT = new THREE.Vector3(0, 0, 1);
+      const DOWN = new THREE.Vector3(0, -1, 0);
+      const LAT = { L: new THREE.Vector3(1, 0, 0), R: new THREE.Vector3(-1, 0, 0) };
+
+      /* 팔꿈치 굴곡축.
+         굴곡은 좌우 모두 전완을 앞(+ANT)으로 접는다. 그런데 LAT 은 팔마다 부호가
+         반대라, 이걸 그대로 회전축으로 쓰면 오른팔은 앞으로 접히고 왼팔은 뒤로
+         접힌다. 굴곡축은 팔에 무관한 하나의 축이어야 한다.
+         (차렷에서 60도 굽혔을 때 전완의 +z 성분: LAT 축이면 L -0.87 / R +0.87,
+          고정축이면 양쪽 다 +0.87 로 좌우가 정확히 거울이 된다) */
+      const FLEX_AXIS = new THREE.Vector3(-1, 0, 0);
+      const ARMS = ["L", "R"];
+      const ARM_KO = { L: "왼팔", R: "오른팔" };
+      const SENSOR_IDS = {
+        L: ["L_SHOULDER", "L_UPPERARM", "L_FOREARM"],
+        R: ["R_SHOULDER", "R_UPPERARM", "R_FOREARM"],
+      };
+
+      const holder = document.getElementById("canvas-holder");
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0f1115);
+      const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      holder.appendChild(renderer.domElement);
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+      const key = new THREE.DirectionalLight(0xffffff, 0.9);
+      key.position.set(3, 6, 4);
+      scene.add(key);
+      const rim = new THREE.DirectionalLight(0x4aa3ff, 0.3);
+      rim.position.set(-4, 2, -3);
+      scene.add(rim);
+
+      const grid = new THREE.GridHelper(6, 12, 0x2a3040, 0x1c212b);
+      grid.position.y = -2.055;   // 발바닥 평면. FLOOR_Y 와 같은 값
+      scene.add(grid);
+
+      const root = new THREE.Group();
+      scene.add(root);
+
+      /* ── 몸통: 골반 → 척추 체인 → 흉곽/머리 ─────────────────────
+         하체 서버가 골반 기울기와 허리 굽힘을 주므로, 상체가 통째로 도는 대신
+         골반에서 한 번, 척추 마디에서 나눠 휜다. 팔은 흉곽에 매달리므로
+         상체를 숙이면 팔도 같이 따라간다 (실제 몸과 같은 계층). */
+      const torsoMat = new THREE.MeshStandardMaterial({ color: 0x4ade80, roughness: 0.6, metalness: 0.1 });
+      const spineMat = new THREE.MeshStandardMaterial({ color: 0x4ade80, roughness: 0.5, metalness: 0.1 });
+      const vertMat = new THREE.MeshStandardMaterial({ color: 0x3fbf6f, roughness: 0.4 });
+
+      // 골반 피벗 (하체 pelvis_tilt 로 회전). 고관절 높이에 둔다.
+      const bodyPivot = new THREE.Group();
+      bodyPivot.position.y = -0.62;
+      root.add(bodyPivot);
+
+      const pelvis = new THREE.Mesh(new THREE.CapsuleGeometry(0.26, 0.3, 4, 12), torsoMat);
+      pelvis.rotation.z = Math.PI / 2;
+      bodyPivot.add(pelvis);
+
+      // 척추 5마디. 허리 총 굽힘을 나눠 배분해 C자 곡선으로 휜다.
+      const SPINE_SEGMENTS = 5, SPINE_SEG_LEN = 0.19;
+      const SPINE_W = [0.14, 0.18, 0.2, 0.23, 0.25];   // 아래→위 가중치(합 1)
+      const spineJoints = [];
+      let spineParent = bodyPivot;
+      for (let s = 0; s < SPINE_SEGMENTS; s++) {
+        const j = new THREE.Group();
+        j.position.y = s === 0 ? 0.16 : SPINE_SEG_LEN;
+        spineParent.add(j);
+        const rad = 0.13 - s * 0.008;
+        const seg = new THREE.Mesh(new THREE.CapsuleGeometry(rad, SPINE_SEG_LEN * 0.72, 5, 10), spineMat);
+        seg.position.y = SPINE_SEG_LEN / 2;
+        j.add(seg);
+        j.add(new THREE.Mesh(new THREE.SphereGeometry(rad * 0.6, 12, 8), vertMat));
+        spineJoints.push(j);
+        spineParent = j;
+      }
+
+      // 흉곽 = 팔이 매달리는 곳. 척추 맨 위 마디의 자식이다.
+      const chest = new THREE.Group();
+      chest.position.y = SPINE_SEG_LEN;
+      spineParent.add(chest);
+      const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 0.5, 6, 16), torsoMat);
+      torso.position.y = 0.26;
+      chest.add(torso);
+
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(0.19, 20, 16),
+        new THREE.MeshStandardMaterial({ color: 0x2f3742, roughness: 0.7 }),
+      );
+      head.position.y = 0.72;
+      chest.add(head);
+
+      // 코: 어느 쪽이 앞인지 눈으로 확인할 수 있게 (+z 가 앞)
+      const nose = new THREE.Mesh(
+        new THREE.ConeGeometry(0.05, 0.13, 12),
+        new THREE.MeshStandardMaterial({ color: 0xff8c42, roughness: 0.5 }),
+      );
+      nose.position.set(0, 0.69, 0.19);
+      nose.rotation.x = Math.PI / 2;
+      chest.add(nose);
+
+      /* ── 다리 두 벌 ─────────────────────────────────────────────
+         골반에 매달린다. 무릎은 로컬 X축 둘레로 접히고(종아리가 뒤로),
+         고관절은 앞뒤로 흔들린다. 좌우를 거울로 만들지 않고 위치만 반대로
+         두어, 같은 회전 규칙을 양쪽에 그대로 쓴다. */
+      const THIGH_LEN = 0.72, CALF_LEN = 0.68;
+      const jointMatLeg = new THREE.MeshStandardMaterial({ color: 0x9aa0ac, roughness: 0.4 });
+
+      // 하체 3D 목표값(라디안). animate() 가 매 프레임 읽으므로 여기서 먼저 만든다.
+      // (통신부에서 선언하면 animate 가 먼저 돌아 초기화 전 접근 오류가 난다)
+      const lowTarget = { pelvis: 0, lumbar: 0 };
+      const thighMat = new THREE.MeshStandardMaterial({ color: 0x4aa3ff, roughness: 0.45, metalness: 0.1 });
+      const calfMat = new THREE.MeshStandardMaterial({ color: 0xff8c42, roughness: 0.45, metalness: 0.1 });
+      const footMat = new THREE.MeshStandardMaterial({ color: 0xffb37a, roughness: 0.5 });
+      const legs = {};
+
+      for (const side of ARMS) {
+        const sx = side === "R" ? -0.19 : 0.19;
+        const hip = new THREE.Group();
+        hip.position.set(sx, 0, 0);
+        bodyPivot.add(hip);
+        hip.add(new THREE.Mesh(new THREE.SphereGeometry(0.095, 16, 12), jointMatLeg));
+
+        const thighPivot = new THREE.Group();
+        hip.add(thighPivot);
+        const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.098, THIGH_LEN, 6, 14), thighMat);
+        thigh.position.y = -THIGH_LEN / 2;
+        thighPivot.add(thigh);
+
+        const knee = new THREE.Group();
+        knee.position.y = -THIGH_LEN;
+        thighPivot.add(knee);
+        knee.add(new THREE.Mesh(new THREE.SphereGeometry(0.08, 14, 10), jointMatLeg));
+
+        const calfPivot = new THREE.Group();
+        knee.add(calfPivot);
+        const calf = new THREE.Mesh(new THREE.CapsuleGeometry(0.08, CALF_LEN, 6, 14), calfMat);
+        calf.position.y = -CALF_LEN / 2;
+        calfPivot.add(calf);
+
+        const foot = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.07, 0.28), footMat);
+        foot.position.set(0, -CALF_LEN, 0.08);
+        calfPivot.add(foot);
+
+        legs[side] = { thighPivot, calfPivot, targetThigh: 0, targetCalf: 0 };
+      }
+
+      /* ── 발바닥 접지 ────────────────────────────────────────────
+         다리는 골반에 매달린 구조라, 그냥 두면 무릎을 접을 때 발이 위로 들린다.
+         실제로는 발바닥이 땅에 붙어 있고 몸통이 내려간다. 그래서 매 프레임
+         정기구학으로 발목이 어디로 갔는지 계산해서, 그만큼 몸통을 반대로
+         옮겨 발목을 제자리에 붙들어 둔다.
+
+           월드 기준 넓적다리 각 t = 골반 회전 + 고관절 각
+           월드 기준 정강이 각   c = t + 무릎 각        (계층이 곱해지므로)
+           발목 위치(골반 기준) = (0, -(Lt·cos t + Lc·cos c), -(Lt·sin t + Lc·sin c))
+
+         y 는 두 발 중 더 낮은 쪽에 맞춘다(발이 바닥을 뚫지 않게).
+         z 는 두 발의 평균으로 맞춘다(몸이 두 발 사이에 오도록). */
+      const BODY_Y0 = -0.62;                              // 서 있을 때 골반 높이
+      const STAND_ANKLE = -(THIGH_LEN + CALF_LEN);        // 서 있을 때 발목 (골반 기준)
+      const SOLE_DROP = 0.035;                            // 발목에서 발바닥까지
+      const FLOOR_Y = BODY_Y0 + STAND_ANKLE - SOLE_DROP;  // 발바닥이 닿는 평면
+
+      function groundFeet() {
+        const pv = bodyPivot.rotation.x;
+        let minY = Infinity, sumZ = 0, n = 0;
+        for (const s of ARMS) {
+          const t = pv + legs[s].thighPivot.rotation.x;
+          const c = t + legs[s].calfPivot.rotation.x;
+          const y = -(THIGH_LEN * Math.cos(t) + CALF_LEN * Math.cos(c));
+          const z = -(THIGH_LEN * Math.sin(t) + CALF_LEN * Math.sin(c));
+          if (y < minY) minY = y;
+          sumZ += z; n++;
+        }
+        if (!n || !isFinite(minY)) return;
+        bodyPivot.position.y = BODY_Y0 + (STAND_ANKLE - minY);
+        bodyPivot.position.z = -sumZ / n;
+        // 팔 방위 부채꼴은 바닥 표시이므로 사람을 따라 앞뒤로만 같이 옮긴다
+        for (const s of ARMS) {
+          const f = limbs[s] && limbs[s].fan;
+          if (f) f.group.position.z = bodyPivot.position.z;
+        }
+      }
+
+      /* ── 바닥 판정 부채꼴 ──────────────────────────────────────
+         서버가 보내주는 bound_back / lo / hi / far 를 그대로 그린다.
+         여기서 다시 계산하면 그림과 판정이 어긋난다. */
+      const FAN_COLOR = [0x3b6ea5, 0x7a5fa8, 0x2f8c74];
+      function makeFan(side, sx) {
+        const g = new THREE.Group();
+        g.position.set(sx, -2.045, 0);   // 바닥 바로 위
+        root.add(g);
+        const parts = FAN_COLOR.map((c) => {
+          const m = new THREE.Mesh(
+            new THREE.BufferGeometry(),
+            new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false }),
+          );
+          g.add(m);
+          return m;
+        });
+        return { group: g, parts, key: "" };
+      }
+      function updateFan(side, x, scaleK) {
+        const f = limbs[side].fan;
+        if (!x || x.bound_lo == null || x.bound_back == null) { f.group.visible = false; return; }
+        f.group.visible = true;
+        const segs = [[x.bound_back, x.bound_lo], [x.bound_lo, x.bound_hi], [x.bound_hi, x.bound_far]];
+        const k = segs.join("|") + ":" + scaleK.toFixed(3);
+        if (k === f.key) return;                       // 값이 그대로면 다시 만들지 않는다
+        f.key = k;
+        const lat = LAT[side], R = 1.25;
+        segs.forEach(([a0, a1], i) => {
+          const pts = [0, 0, 0];
+          const n = Math.max(2, Math.round(Math.abs(a1 - a0) / 3));
+          for (let j = 0; j <= n; j++) {
+            const a = THREE.MathUtils.degToRad((a0 + ((a1 - a0) * j) / n) * scaleK);
+            const p = new THREE.Vector3()
+              .addScaledVector(ANT, R * Math.cos(a))
+              .addScaledVector(lat, R * Math.sin(a));
+            pts.push(p.x, p.y, p.z);
+          }
+          const idx = [];
+          for (let j = 1; j < n + 1; j++) idx.push(0, j, j + 1);
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+          geo.setIndex(idx);
+          f.parts[i].geometry.dispose();
+          f.parts[i].geometry = geo;
+        });
+      }
+
+      /* ── 팔 두 벌 ────────────────────────────────────────────── */
+      const UPPER_LEN = 0.62, FORE_LEN = 0.55;
+      const ARM_COLOR = { L: 0xff8c42, R: 0x4aa3ff };
+      const jointMat = new THREE.MeshStandardMaterial({ color: 0x9aa0ac, roughness: 0.4 });
+      const limbs = {};
+
+      for (const side of ARMS) {
+        // 사람의 오른쪽 어깨는 -x, 왼쪽은 +x
+        const sx = side === "R" ? -0.4 : 0.4;
+        const upperMat = new THREE.MeshStandardMaterial({ color: ARM_COLOR[side], roughness: 0.45, metalness: 0.1 });
+        const foreMat = new THREE.MeshStandardMaterial({ color: ARM_COLOR[side], roughness: 0.5, metalness: 0.05, opacity: 0.82, transparent: true });
+
+        const shoulder = new THREE.Group();
+        shoulder.position.set(sx, 0.44, 0);
+        chest.add(shoulder);   // [통합] root 대신 흉곽에 매단다 → 상체를 숙이면 팔도 따라감
+        shoulder.add(new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 12), jointMat));
+
+        const upperPivot = new THREE.Group();
+        shoulder.add(upperPivot);
+        const upperArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, UPPER_LEN, 6, 14), upperMat);
+        upperArm.position.y = -UPPER_LEN / 2;
+        upperPivot.add(upperArm);
+
+        const elbow = new THREE.Group();
+        elbow.position.y = -UPPER_LEN;
+        upperPivot.add(elbow);
+        elbow.add(new THREE.Mesh(new THREE.SphereGeometry(0.075, 16, 12), jointMat));
+
+        const forePivot = new THREE.Group();
+        elbow.add(forePivot);
+        const foreArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.07, FORE_LEN, 6, 14), foreMat);
+        foreArm.position.y = -FORE_LEN / 2;
+        forePivot.add(foreArm);
+
+        limbs[side] = {
+          upperPivot, forePivot,
+          targetUpper: new THREE.Quaternion(),
+          targetFore: new THREE.Quaternion(),
+          fan: makeFan(side, sx),
+        };
+      }
+
+      /* 서버의 (elev, az, flex) -> 팔 방향
+
+         flex 규약: 서버는 '팔꿈치 영점'을 잡은 완전히 편 자세를 180도로 두고,
+         굽힐수록 줄어드는 값을 보낸다 (실측: 차렷 174~180, 90도 굽힘 ~90).
+         반면 3D 는 '편 상태에서 몇 도 접었는가'로 돌려야 하므로 180 에서 뺀다.
+         이걸 안 하면 팔을 쭉 폈을 때 전완이 180도 접혀 버린다. */
+      const ELBOW_MAX_BEND = 150;      // 사람 팔꿈치의 실제 최대 굴곡
+      function flexToBend(flex) {
+        if (flex == null || !isFinite(flex)) return 0;
+        return Math.max(0, Math.min(ELBOW_MAX_BEND, 180 - flex));
+      }
+
+      function applyPose(side, elev, az, flex) {
+        const L = limbs[side];
+        const e = THREE.MathUtils.degToRad(elev || 0);
+        const a = THREE.MathUtils.degToRad(az || 0);
+        const lat = LAT[side];
+
+        const dir = new THREE.Vector3()
+          .addScaledVector(ANT, Math.sin(e) * Math.cos(a))
+          .addScaledVector(lat, Math.sin(e) * Math.sin(a))
+          .addScaledVector(DOWN, Math.cos(e))
+          .normalize();
+        L.targetUpper.setFromUnitVectors(DOWN, dir);
+
+        // 팔꿈치 굴곡축 = 고정 굴곡축을 상완과 함께 돌린 것.
+        // 팔이 어디를 향하든 전완이 앞으로 접히고, 특이점이 없다.
+        const axis = FLEX_AXIS.clone().applyQuaternion(L.targetUpper).normalize();
+        const foreDir = dir.clone()
+          .applyAxisAngle(axis, THREE.MathUtils.degToRad(flexToBend(flex)));
+        const foreWorld = new THREE.Quaternion().setFromUnitVectors(DOWN, foreDir);
+        L.targetFore.copy(L.targetUpper).invert().multiply(foreWorld);
+      }
+      ARMS.forEach((s) => applyPose(s, 0, 0, 180));   // 180 = 팔을 편 상태
+
+      /* ── 카메라 ─────────────────────────────────────────────── */
+      const camTarget = new THREE.Vector3(0, 0, 0);
+      const views = {
+        front: new THREE.Vector3(0, 0.3, 5),
+        side: new THREE.Vector3(5, 0.3, 0.001),
+        top: new THREE.Vector3(0.001, 5.2, 0.6),
+        iso: new THREE.Vector3(3.4, 1.8, 3.8),
+      };
+      let camPos = views.iso.clone();
+      window.setView = (v) => {
+        camPos = views[v].clone();
+        orbit = 0;
+        document.querySelectorAll(".viewbtns button").forEach((b) => b.classList.remove("on"));
+        const idx = { front: 0, top: 1, side: 2, iso: 3 }[v];
+        document.querySelectorAll(".viewbtns button")[idx].classList.add("on");
+      };
+
+      function resize() {
+        const w = holder.clientWidth, h = holder.clientHeight;
+        renderer.setSize(w, h);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+      }
+      window.addEventListener("resize", resize);
+      resize();
+
+      let dragging = false, px = 0, orbit = 0;
+      holder.addEventListener("pointerdown", (e) => { dragging = true; px = e.clientX; });
+      window.addEventListener("pointerup", () => (dragging = false));
+      window.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        orbit += (e.clientX - px) * 0.01;
+        px = e.clientX;
+      });
+      holder.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const s = 1 + e.deltaY * 0.0012;
+        camPos.multiplyScalar(Math.max(0.6, Math.min(1.6, s)));
+        if (camPos.length() < 2.2) camPos.setLength(2.2);
+        if (camPos.length() > 11) camPos.setLength(11);
+      }, { passive: false });
+
+      function animate() {
+        requestAnimationFrame(animate);
+        for (const s of ARMS) {
+          limbs[s].upperPivot.quaternion.slerp(limbs[s].targetUpper, 0.18);
+          limbs[s].forePivot.quaternion.slerp(limbs[s].targetFore, 0.18);
+          // 하체: 각도값이라 부드럽게 보간만 해준다
+          const lg = legs[s];
+          lg.thighPivot.rotation.x += (lg.targetThigh - lg.thighPivot.rotation.x) * 0.18;
+          lg.calfPivot.rotation.x += (lg.targetCalf - lg.calfPivot.rotation.x) * 0.18;
+        }
+        bodyPivot.rotation.x += (lowTarget.pelvis - bodyPivot.rotation.x) * 0.18;
+        for (let i = 0; i < spineJoints.length; i++) {
+          const want = lowTarget.lumbar * SPINE_W[i];
+          spineJoints[i].rotation.x += (want - spineJoints[i].rotation.x) * 0.18;
+        }
+        groundFeet();   // 다리·골반 각이 정해진 뒤에 몸통 위치를 맞춘다
+        const r = camPos.clone();
+        const c = Math.cos(orbit), sn = Math.sin(orbit);
+        camera.position.lerp(new THREE.Vector3(r.x * c - r.z * sn, r.y, r.x * sn + r.z * c), 0.12);
+        camera.lookAt(camTarget);
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      /* ═══════════════════════════════════════════════════════════
+         통신 (서버 v6 · 양팔)
+           교정 명령에는 arm 과 src:"ui" 를 반드시 붙인다.
+           src 가 없으면 서버는 보드 BOOT 버튼으로 보고 앵커만 재설정한다.
+         ═══════════════════════════════════════════════════════════ */
+      let ws = null, last = null, calArm = "L", recMode = "BOTH";
+      const $ = (id) => document.getElementById(id);
+
+      /* ═══════════════════════════════════════════════════════════
+         하체 (무릎 / 고관절 / 골반 / 허리)
+           별도 포트의 하체 서버에 따로 접속한다. 두 서버를 코드로 합치지
+           않은 이유: 상체 v6 과 하체 v1.8 은 방송 형식이 서로 다르고
+           각자 계속 수정되는 중이라, 한쪽을 고칠 때 다른 쪽이 깨지지 않는
+           편이 안전하다. 뷰어에서만 합쳐 보여준다.
+         ═══════════════════════════════════════════════════════════ */
+      let wsLow = null, lastLow = null;
+      const lowState = {                            // 도 단위 (판정/표시용)
+        knee_R: null, knee_L: null, hip_R: null, hip_L: null,
+        pelvis: null, lumbar: null, ok: false,
+      };
+
+      const D2R = Math.PI / 180;
+      const clampDeg = (v, m) => Math.max(-m, Math.min(m, v || 0));
+
+      window.toggleConnLow = () => {
+        if (wsLow && wsLow.readyState <= 1) { wsLow.close(); return; }
+        try { wsLow = new WebSocket($("ws-url-low").value.trim()); }
+        catch { $("low-status").textContent = "하체: 주소 형식이 잘못되었습니다."; return; }
+        wsLow.onopen = () => {
+          $("btn-conn-low").textContent = "해제";
+          $("btn-conn-low").classList.add("on");
+          $("low-status").textContent = "하체 서버 연결됨. 직립 자세에서 영점을 잡으세요.";
+        };
+        wsLow.onclose = () => {
+          $("btn-conn-low").textContent = "연결";
+          $("btn-conn-low").classList.remove("on");
+          $("low-status").textContent = "하체 서버 연결 끊김";
+          lastLow = null; lowState.ok = false;
+          for (const k of ["knee_R","knee_L","hip_R","hip_L","pelvis","lumbar"]) lowState[k] = null;
+          renderLow();
+        };
+        wsLow.onerror = () => { $("low-status").textContent =
+          "하체 서버에 연결할 수 없습니다. 포트가 상체와 다른지 확인하세요."; };
+        wsLow.onmessage = (evt) => {
+          let d; try { d = JSON.parse(evt.data); } catch { return; }
+          if (!d || d.type !== "angles" || !d.angles) return;
+          updateLow(d.angles);
+        };
+      };
+
+      window.sendLow = (cmd) => {
+        if (wsLow && wsLow.readyState === 1) wsLow.send(JSON.stringify({ cmd }));
+      };
+
+      function updateLow(a) {
+        lastLow = a;
+        // 무릎: 서버는 굴곡(0=폄). 화면·판정은 표시각(180=폄) 규약을 쓴다.
+        for (const s of ARMS) {
+          const flex = a["knee_" + s + "_flex_g"];
+          lowState["knee_" + s] = (flex == null) ? null : 180 - Math.min(flex, 150);
+          const hip = a["hip_" + s + "_signed"];
+          const hipAbs = a["hip_" + s + "_flex_g"];
+          lowState["hip_" + s] = (hip != null) ? hip : (hipAbs == null ? null : hipAbs);
+          // 3D: 고관절은 앞으로(+) 들리고, 무릎은 뒤로 접힌다
+          const lg = legs[s];
+          lg.targetThigh = -clampDeg(lowState["hip_" + s] || 0, 120) * D2R;
+          lg.targetCalf = clampDeg(flex || 0, 150) * D2R;
+        }
+        lowState.pelvis = a.pelvis_tilt ?? null;
+        lowState.lumbar = a.lumbar_signed ?? null;
+        lowState.ok = !!a.signed_ok;
+        lowTarget.pelvis = clampDeg(lowState.pelvis || 0, 90) * D2R;
+        lowTarget.lumbar = clampDeg(lowState.lumbar || 0, 90) * D2R;
+        renderLow();
+        updatePoseCheck();
+      }
+
+      function renderLow() {
+        const f = (v, u) => (v == null ? "–" : Math.round(v) + (u || "°"));
+        $("lv-knee-R").textContent = f(lowState.knee_R);
+        $("lv-knee-L").textContent = f(lowState.knee_L);
+        $("lv-hip-R").textContent = f(lowState.hip_R);
+        $("lv-hip-L").textContent = f(lowState.hip_L);
+        $("lv-pelvis").textContent = f(lowState.pelvis);
+        $("lv-lumbar").textContent = f(lowState.lumbar);
+        if (lastLow && !lowState.ok) {
+          $("low-status").textContent =
+            "앞뒤 구분(부호) 학습 전입니다. 영점 뒤 몸을 20° 이상 움직이면 자동으로 잡힙니다.";
+        } else if (lastLow) {
+          const dr = Math.max(lastLow.knee_R_drift_min || 0, lastLow.knee_L_drift_min || 0);
+          $("low-status").textContent = dr > 5
+            ? `드리프트 ≥${Math.round(dr)}° — 직립 자세에서 영점을 다시 잡으세요.`
+            : "하체 수신 중";
+        }
+      }
+
+      /* ═══════════════════════════════════════════════════════════
+         운동 자세 검증
+           상체(팔 거상/방위/팔꿈치)와 하체(무릎/고관절/골반/허리)를 한 자세
+           정의 안에서 함께 판정한다. 부위별로 목표각·허용오차·사용여부를
+           화면에서 정하고, 자세도 추가/삭제할 수 있다.
+         ═══════════════════════════════════════════════════════════ */
+      const POSE_PARTS = [
+        { key: "knee_R", label: "오른 무릎", hint: "180=폄" },
+        { key: "knee_L", label: "왼 무릎", hint: "180=폄" },
+        { key: "hip_R", label: "오른 고관절", hint: "0=직립" },
+        { key: "hip_L", label: "왼 고관절", hint: "0=직립" },
+        { key: "pelvis", label: "골반 숙임", hint: "+앞/−뒤" },
+        { key: "lumbar", label: "허리 굽힘", hint: "+굽힘/−폄" },
+        { key: "elev_R", label: "오른팔 거상", hint: "0=차렷" },
+        { key: "elev_L", label: "왼팔 거상", hint: "0=차렷" },
+        { key: "az_R", label: "오른팔 방위", hint: "0=앞" },
+        { key: "az_L", label: "왼팔 방위", hint: "0=앞" },
+        { key: "flex_R", label: "오른 팔꿈치", hint: "180=폄" },
+        { key: "flex_L", label: "왼 팔꿈치", hint: "180=폄" },
+      ];
+
+      function blankDef() {
+        const d = {};
+        for (const p of POSE_PARTS) d[p.key] = { target: 0, tol: 10, use: false };
+        return d;
+      }
+      function mkPose(over) {
+        const d = blankDef();
+        for (const k in (over || {})) d[k] = Object.assign({}, d[k], over[k]);
+        return d;
+      }
+
+      // 무릎 115±8 은 실측(정자세 스쿼트 110~120)에서 나온 값이다.
+      const DEFAULT_POSES = {
+        "정자세 스쿼트": mkPose({
+          knee_R: { target: 115, tol: 8, use: true },
+          knee_L: { target: 115, tol: 8, use: true },
+          hip_R: { target: 95, tol: 15, use: false },
+          hip_L: { target: 95, tol: 15, use: false },
+          pelvis: { target: 30, tol: 15, use: false },
+          lumbar: { target: 0, tol: 12, use: false },
+        }),
+        "직립 (기준)": mkPose({
+          knee_R: { target: 180, tol: 8, use: true },
+          knee_L: { target: 180, tol: 8, use: true },
+        }),
+        "숄더 프레스": mkPose({
+          elev_R: { target: 160, tol: 15, use: true },
+          elev_L: { target: 160, tol: 15, use: true },
+          knee_R: { target: 180, tol: 10, use: true },
+          knee_L: { target: 180, tol: 10, use: true },
+          lumbar: { target: 0, tol: 12, use: false },
+        }),
+      };
+
+      const POSE_STORE_KEY = "mocap_pose_defs_full_v1";
+      let poseDefs = loadPoseDefs();
+      let poseCheckOn = false;
+      let currentPoseName = Object.keys(poseDefs)[0] || null;
+
+      function loadPoseDefs() {
+        try {
+          const raw = localStorage.getItem(POSE_STORE_KEY);
+          if (raw) {
+            const p = JSON.parse(raw);
+            if (p && typeof p === "object" && Object.keys(p).length) {
+              // 저장본에 없는 새 부위가 생겼을 수 있으니 채워 넣는다
+              for (const n in p) p[n] = mkPose(p[n]);
+              return p;
+            }
+          }
+        } catch (e) { /* 저장소 사용 불가 */ }
+        return JSON.parse(JSON.stringify(DEFAULT_POSES));
+      }
+      function persistPoseDefs() {
+        try { localStorage.setItem(POSE_STORE_KEY, JSON.stringify(poseDefs)); }
+        catch (e) { /* 무시 */ }
+      }
+
+      // 지금 측정값을 판정 규약으로 모은다. 상체는 last(v6), 하체는 lowState.
+      function poseMetrics() {
+        const m = {};
+        for (const k of ["knee_R","knee_L","hip_R","hip_L","pelvis","lumbar"]) m[k] = lowState[k];
+        for (const s of ARMS) {
+          const x = (last && last.arms) ? last.arms[s] : null;
+          const alive = x && x.quat && x.quat.ua;
+          m["elev_" + s] = alive ? x.elev : null;
+          m["az_" + s] = alive ? x.az : null;
+          m["flex_" + s] = (alive && x.flex != null) ? x.flex : null;
+        }
+        return m;
+      }
+
+      function judgePart(def, value) {
+        if (!def || !def.use) return { state: "na" };
+        if (value == null || !isFinite(value)) return { state: "na" };
+        const diff = value - def.target;
+        return { state: Math.abs(diff) <= def.tol ? "ok" : "off", diff, value };
+      }
+
+      function buildPoseSelect() {
+        const sel = $("pose-select");
+        if (!sel) return;
+        sel.innerHTML = "";
+        for (const name of Object.keys(poseDefs)) {
+          const o = document.createElement("option");
+          o.value = name; o.textContent = name;
+          sel.appendChild(o);
+        }
+        if (currentPoseName && poseDefs[currentPoseName]) sel.value = currentPoseName;
+        currentPoseName = sel.value || Object.keys(poseDefs)[0] || null;
+        sel.onchange = () => { currentPoseName = sel.value; buildPoseEditor(); updatePoseCheck(); };
+      }
+
+      window.togglePoseCheck = () => {
+        poseCheckOn = !poseCheckOn;
+        const b = $("pose-toggle");
+        b.textContent = poseCheckOn ? "중지" : "시작";
+        b.classList.toggle("on", poseCheckOn);
+        $("pose-overall").style.display = poseCheckOn ? "" : "none";
+        if (!poseCheckOn) clearPoseHighlight();
+        updatePoseCheck();
+      };
+
+      window.addPose = () => {
+        const name = ($("pose-new-name").value || "").trim();
+        if (!name) return;
+        if (poseDefs[name]) { alert("같은 이름의 자세가 이미 있습니다."); return; }
+        poseDefs[name] = blankDef();
+        currentPoseName = name;
+        $("pose-new-name").value = "";
+        persistPoseDefs(); buildPoseSelect(); buildPoseEditor(); updatePoseCheck();
+      };
+
+      window.deletePose = () => {
+        if (!currentPoseName) return;
+        if (Object.keys(poseDefs).length <= 1) { alert("자세가 하나뿐이라 삭제할 수 없습니다."); return; }
+        if (!confirm(`'${currentPoseName}' 자세를 삭제할까요?`)) return;
+        delete poseDefs[currentPoseName];
+        currentPoseName = Object.keys(poseDefs)[0];
+        persistPoseDefs(); buildPoseSelect(); buildPoseEditor(); updatePoseCheck();
+      };
+
+      // 지금 자세를 그대로 목표로. 값이 있는 부위만 켜고 목표를 채운다.
+      window.capturePose = () => {
+        if (!currentPoseName) return;
+        const m = poseMetrics();
+        const def = poseDefs[currentPoseName];
+        let n = 0;
+        for (const p of POSE_PARTS) {
+          const v = m[p.key];
+          if (v == null || !isFinite(v)) continue;
+          def[p.key].target = Math.round(v);
+          def[p.key].use = true;
+          n++;
+        }
+        persistPoseDefs(); buildPoseEditor(); updatePoseCheck();
+        $("low-status").textContent = `현재 자세를 '${currentPoseName}' 목표로 저장했습니다 (${n}개 부위).`;
+      };
+
+      // 부위 → 3D 메쉬 (벗어난 곳을 빨갛게)
+      function partMeshes(key) {
+        if (key === "knee_R") return [legs.R.calfPivot];
+        if (key === "knee_L") return [legs.L.calfPivot];
+        if (key === "hip_R") return [legs.R.thighPivot];
+        if (key === "hip_L") return [legs.L.thighPivot];
+        if (key === "pelvis") return [pelvis];
+        if (key === "lumbar") return spineJoints;
+        if (key === "elev_R" || key === "az_R") return [limbs.R.upperPivot];
+        if (key === "elev_L" || key === "az_L") return [limbs.L.upperPivot];
+        if (key === "flex_R") return [limbs.R.forePivot];
+        if (key === "flex_L") return [limbs.L.forePivot];
+        return [];
+      }
+      function setTint(obj, on) {
+        obj.traverse((o) => {
+          if (o.isMesh && o.material && o.material.color) {
+            if (on) {
+              if (o.userData._c == null) o.userData._c = o.material.color.getHex();
+              o.material.color.setHex(0xff4d4d);
+            } else if (o.userData._c != null) {
+              o.material.color.setHex(o.userData._c);
+              o.userData._c = null;
+            }
+          }
+        });
+      }
+      function clearPoseHighlight() {
+        for (const p of POSE_PARTS) partMeshes(p.key).forEach((m) => setTint(m, false));
+      }
+
+      function updatePoseCheck() {
+        const rows = $("pose-rows");
+        if (!rows) return;
+        if (!poseCheckOn || !currentPoseName || !poseDefs[currentPoseName]) {
+          rows.innerHTML = ""; clearPoseHighlight(); return;
+        }
+        const def = poseDefs[currentPoseName];
+        const m = poseMetrics();
+        let html = "", nOk = 0, nOff = 0;
+        const tint = {};
+
+        for (const part of POSE_PARTS) {
+          const d = def[part.key];
+          if (!d || !d.use) continue;
+          const j = judgePart(d, m[part.key]);
+          let val, msg, col;
+          if (j.state === "na") {
+            val = "–"; msg = "값 없음"; col = "var(--ink-dim)"; tint[part.key] = false;
+          } else if (j.state === "ok") {
+            val = Math.round(j.value) + "°"; msg = "정상";
+            col = "var(--good)"; nOk++; tint[part.key] = false;
+          } else {
+            val = Math.round(j.value) + "°";
+            msg = (j.diff > 0 ? "큼 +" : "작음 −") + Math.abs(Math.round(j.diff)) + "°";
+            col = "var(--warn)"; nOff++; tint[part.key] = true;
+          }
+          html += `<div style="display:flex;justify-content:space-between;align-items:baseline;
+              padding:5px 0;border-top:1px solid var(--line)">
+              <span style="font-size:12.5px;color:var(--ink-dim)">${part.label}
+                <span style="font-size:10.5px">(${d.target}±${d.tol})</span></span>
+              <span style="text-align:right">
+                <span style="font-size:15px;font-weight:650;color:${col}">${val}</span>
+                <span style="display:block;font-size:10.5px;color:${col}">${msg}</span>
+              </span></div>`;
+        }
+        if (!html) html = `<p class="sub">판정할 부위가 없습니다. 아래에서 <b>사용</b>을 켜거나
+          <b>현재 자세로 목표 설정</b>을 누르세요.</p>`;
+        rows.innerHTML = html;
+
+        for (const part of POSE_PARTS) {
+          const want = tint[part.key] === true;
+          partMeshes(part.key).forEach((mm) => setTint(mm, want));
+        }
+
+        const ov = $("pose-overall");
+        if (nOk + nOff === 0) {
+          ov.style.background = "rgba(154,160,172,.15)"; ov.style.color = "var(--ink-dim)";
+          ov.textContent = "측정 대기 중…";
+        } else if (nOff === 0) {
+          ov.style.background = "rgba(74,222,128,.15)"; ov.style.color = "var(--good)";
+          ov.textContent = `✓ 정자세 (${nOk}/${nOk + nOff})`;
+        } else {
+          ov.style.background = "rgba(251,191,36,.15)"; ov.style.color = "var(--warn)";
+          ov.textContent = `✗ 교정 필요 — ${nOff}개 부위 벗어남`;
+        }
+      }
+
+      function buildPoseEditor() {
+        const box = $("pose-editor");
+        if (!box || !currentPoseName) return;
+        $("pose-edit-who").textContent = currentPoseName;
+        const def = poseDefs[currentPoseName];
+        const ist = `background:#0c0e12;border:1px solid var(--line);border-radius:6px;
+          color:var(--ink);font-size:12px;width:100%;padding:5px 4px;text-align:center`;
+        let html = `<div style="display:grid;grid-template-columns:1fr 62px 62px 34px;
+          gap:5px 6px;align-items:center;font-size:11.5px">
+          <span style="color:var(--ink-dim)">부위</span>
+          <span style="color:var(--ink-dim);text-align:center">목표</span>
+          <span style="color:var(--ink-dim);text-align:center">± 오차</span>
+          <span style="color:var(--ink-dim);text-align:center">사용</span>`;
+        for (const p of POSE_PARTS) {
+          const d = def[p.key];
+          html += `<span style="color:var(--ink)">${p.label}
+              <span style="color:var(--ink-dim);font-size:10px">${p.hint}</span></span>
+            <input type="number" style="${ist}" value="${d.target}"
+                   oninput="editPose('${p.key}','target',this.value)">
+            <input type="number" style="${ist}" value="${d.tol}" min="0"
+                   oninput="editPose('${p.key}','tol',this.value)">
+            <input type="checkbox" style="width:17px;height:17px;accent-color:var(--accent2)"
+                   ${d.use ? "checked" : ""} onchange="editPose('${p.key}','use',this.checked)">`;
+        }
+        box.innerHTML = html + "</div>";
+      }
+
+      window.editPose = (key, field, val) => {
+        if (!currentPoseName) return;
+        const def = poseDefs[currentPoseName];
+        if (!def[key]) def[key] = { target: 0, tol: 10, use: false };
+        if (field === "use") def[key].use = !!val;
+        else { const n = parseFloat(val); if (isFinite(n)) def[key][field] = n; }
+        updatePoseCheck();
+      };
+      window.savePoseDefs = (b) => {
+        persistPoseDefs();
+        if (b) { const t = b.textContent; b.textContent = "저장됨 ✓";
+                 setTimeout(() => (b.textContent = t), 900); }
+      };
+      window.resetPoseDefs = () => {
+        if (!confirm("모든 자세 정의를 기본값으로 되돌릴까요?")) return;
+        poseDefs = JSON.parse(JSON.stringify(DEFAULT_POSES));
+        currentPoseName = Object.keys(poseDefs)[0];
+        persistPoseDefs(); buildPoseSelect(); buildPoseEditor(); updatePoseCheck();
+      };
+
+      buildPoseSelect();
+      buildPoseEditor();
+      renderLow();
+
+      window.toggleConn = () => {
+        if (ws && ws.readyState <= 1) { ws.close(); return; }
+        try { ws = new WebSocket($("ws-url").value.trim()); }
+        catch { setStatus("주소 형식이 잘못되었습니다.", true); return; }
+        ws.onopen = () => {
+          $("dot").classList.add("on");
+          $("conn-text").textContent = "연결됨";
+          $("btn-conn").textContent = "해제";
+          $("btn-conn").classList.add("on");
+        };
+        ws.onclose = () => {
+          $("dot").classList.remove("on");
+          $("conn-text").textContent = "연결 안 됨";
+          $("btn-conn").textContent = "연결";
+          $("btn-conn").classList.remove("on");
+          last = null;
+          ARMS.forEach((s) => { $("pose-" + s).textContent = "연결 대기"; $("tag-" + s).classList.add("dead"); });
+          $("btn-rec").disabled = true;
+          if (recState === "rec") stopRec();
+          setStatus("서버 연결이 끊겼습니다. 주소를 확인하고 다시 연결하세요.", true);
+        };
+        ws.onerror = () => setStatus("연결할 수 없습니다. 서버가 실행 중인지, 주소가 맞는지 확인하세요.", true);
+        ws.onmessage = (evt) => {
+          let d; try { d = JSON.parse(evt.data); } catch { return; }
+          if (!d || !d.arms || !d.sensors) return;     // v6 방송만 처리
+          update(d);
+        };
+      };
+
+      const send = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+      window.sendCal = (cmd, pose) => {
+        const o = { cmd, arm: calArm, src: "ui" };
+        if (pose) o.pose = pose;
+        send(o);
+      };
+      window.setArm = (a) => {
+        calArm = a;
+        $("tab-L").className = a === "L" ? "selL" : "";
+        $("tab-R").className = a === "R" ? "selR" : "";
+        $("cal-who").textContent = ARM_KO[a];
+        $("val-who").textContent = ARM_KO[a];
+        if (last) update(last);
+      };
+      window.setMode = (m) => {
+        if (recState !== "idle") return;
+        recMode = m;
+        ["L", "R", "BOTH"].forEach((k) => $("mode-" + k).classList.toggle("on", k === m));
+      };
+
+      const POSE_COLOR = {
+        "REST": "#9aa0ac", "앞으로 90도": "#4aa3ff",
+        "대각선 90도": "#a78bfa", "옆으로 90도": "#4ade80",
+        "뒤로": "#fbbf24", "뒤/안쪽": "#fbbf24", "UNKNOWN": "#9aa0ac",
+      };
+
+      function update(d) {
+        last = d;
+
+        for (const s of ARMS) {
+          const x = d.arms[s] || {};
+          const alive = !!(x.quat && x.quat.ua);
+          $("tag-" + s).classList.toggle("dead", !alive);
+          $("pose-" + s).textContent = x.pose === "REST" ? "차렷 (REST)" : (x.pose || "–");
+          $("pose-" + s).style.color = POSE_COLOR[x.pose] || (s === "L" ? "#ff8c42" : "#4aa3ff");
+          $("mt-" + s).textContent =
+            (x.elev == null ? "–" : "elev " + x.elev.toFixed(0) + "°") +
+            (x.az == null ? "" : "  az " + x.az.toFixed(0) + "°") +
+            (x.az_margin == null ? "" : "  여유 " + x.az_margin.toFixed(1) + "°");
+
+          /* 그릴 때만 방위각을 편다.
+             어깨(견갑골) 센서가 팔 움직임의 일부를 같이 먹어서 앞->옆 폭이
+             해부학적 90도가 아니라 압축돼 나온다. 판정은 그 폭 안에서 하므로
+             문제가 없지만, 그대로 그리면 팔이 앞쪽으로 말려 보인다.
+             서버가 주는 기준각 옆(az_ref.side)이 화면에서 90도가 되게 편다. */
+          const sideRef = x.az_ref ? x.az_ref.side : null;
+          const k = sideRef && sideRef > 15 ? Math.min(3, 90 / sideRef) : 1;
+          updateFan(s, x, k);
+          if (alive && x.elev != null && x.az != null)
+            applyPose(s, x.elev, (x.az || 0) * k, x.flex || 0);
+        }
+
+        renderSensors(d.sensors);
+        renderPanel(d.arms[calArm] || {});
+
+        const msgs = ARMS
+          .map((s) => (d.arms[s] && d.arms[s].status !== "OK") ? ARM_KO[s] + ": " + d.arms[s].status : null)
+          .filter(Boolean);
+        if (msgs.length) setStatus(msgs.join("  /  "), true);
+        else setStatus(statusLine(d.arms[calArm] || {}), false);
+
+        $("btn-rec").disabled = false;
+        if (recState !== "idle") tickRec(d);
+        updatePoseCheck();   // [통합] 상체 값도 자세 판정에 들어간다
+      }
+
+      function renderPanel(x) {
+        const r = x.az_ref;
+        $("val-elev").innerHTML = fmt(x.elev);
+        $("val-az").innerHTML = fmt(x.az);
+        $("val-flex").innerHTML = x.flex == null ? "–" : fmt(x.flex);
+        $("val-mag").innerHTML = x.mag == null ? "–" : x.mag.toFixed(2);
+        $("val-margin").innerHTML = x.az_margin == null ? "–" : fmt(x.az_margin);
+        $("val-drift").innerHTML = x.drift == null ? "–" : (x.drift > 0 ? "+" : "") + fmt(x.drift);
+        $("val-tilt").innerHTML = x.sh_tilt == null ? "–" : fmt(x.sh_tilt);
+        $("cell-margin").classList.toggle("alert", x.az_margin != null && x.az_margin < 5);
+        $("val-anchor").textContent = !(x.calib && x.calib.anchor)
+          ? "대기"
+          : (x.anchor_n || 0) + "회" + (x.anchor_age == null ? "" : " · " + x.anchor_age + "초 전");
+        $("val-ref").textContent = r
+          ? r.fwd.toFixed(0) + "° / " + r.diag.toFixed(0) + "° / " + r.side.toFixed(0) + "°"
+          : "교정 전";
+        $("val-band").textContent = x.bound_lo == null
+          ? "교정 전"
+          : "앞 < " + x.bound_lo.toFixed(0) + " < 대각 < " + x.bound_hi.toFixed(0) + " < 옆";
+
+        const c = x.calib || {};
+        setCal("cal-rest", c.rest, !c.rest);
+        setCal("cal-fwd", c.fwd, c.rest && !c.fwd);
+        setCal("cal-side", c.side, c.rest && c.fwd && !c.side);
+        setCal("cal-diag", c.diag, c.side && !c.diag);
+        setCal("cal-anchor", c.anchor, c.side && !c.anchor);
+        setCal("cal-elbow", false, false);
+
+        for (const s of ARMS) {
+          const cc = (last.arms[s] || {}).calib || {};
+          const n = ["rest", "fwd", "side", "diag"].filter((k) => cc[k]).length;
+          $("tab-st-" + s).textContent = n === 4 ? "✓" : "(" + n + "/4)";
+        }
+      }
+
+      function renderSensors(list) {
+        if (!list) return;
+        $("sensors").innerHTML = list.map((s) => {
+          const cls = s.frozen ? "dead" : s.ok ? "live" : s.age == null ? "dead" : "stale";
+          const rate = s.frozen ? "값 멈춤"
+            : s.ok ? s.hz.toFixed(1) + " Hz"
+            : s.age == null ? "수신 없음" : s.age.toFixed(1) + "초 전";
+          const warn = s.known ? "" : " ⚠ 미등록 ID";
+          return `<div class="sensor ${cls}"><span class="sdot"></span><span class="sname">${s.id}${warn}</span><span class="srate">${rate}</span></div>`;
+        }).join("");
+      }
+
+      function statusLine(x) {
+        if (!x.calib || !x.calib.rest) return "1번 차렷 영점부터 시작하세요.";
+        if (!x.calib.side) return "2 앞으로 → 3 옆으로 를 마저 잡으세요.";
+        if (!x.calib.anchor) return "팔을 내리고 1초 정지하면 표류 앵커가 잡힙니다.";
+        const parts = ["수평성분 " + (x.mag ?? 0).toFixed(2)];
+        if (x.az_margin != null) parts.push("경계까지 " + x.az_margin.toFixed(1) + "°");
+        if (x.cal_age != null) parts.push("교정 후 " + Math.floor(x.cal_age / 60) + "분 " + (x.cal_age % 60) + "초");
+        return parts.join(" · ");
+      }
+      function setStatus(msg, warn) {
+        $("status").textContent = msg;
+        $("status").classList.toggle("warn", !!warn);
+      }
+      const fmt = (v) => (v == null ? "–" : v.toFixed(1) + "<small>°</small>");
+      function setCal(id, done, next) {
+        const b = $(id);
+        b.classList.toggle("done", !!done);
+        b.classList.toggle("next", !!next);
+      }
+
+      /* ═══════════════════════════════════════════════════════════
+         데이터 수집 (수집기와 같은 CSV 형식, arm 열 포함)
+         ═══════════════════════════════════════════════════════════ */
+      const COLS = ["arm","label","trial","t","pose","elev","az","mag","flex","flex_drift","drift","anchor_n",
+        "az_side","bound_lo","bound_hi","az_margin","profile","az_ref_fwd","az_ref_diag","az_ref_side",
+        "cal_age","sh_tilt","quality",
+        "sh_w","sh_x","sh_y","sh_z","ua_w","ua_x","ua_y","ua_z","fa_w","fa_x","fa_y","fa_z",
+        "sh_hz","ua_hz","fa_hz","sh_age","ua_age","fa_age"];
+      let rows = [], trials = [], trialSeq = 0;
+      let recState = "idle", recTrial = null, countEnd = 0, recStart = 0, recEnd = 0;
+
+      window.toggleRec = () => {
+        if (recState === "idle") {
+          trialSeq++;
+          recTrial = { id: trialSeq, label: $("log-label").value,
+                       dur: parseInt($("log-dur").value, 10), mode: recMode, n: 0, bad: 0 };
+          trials.push(recTrial);
+          recState = "count";
+          countEnd = Date.now() + 3000;
+          $("btn-rec").textContent = "취소";
+          $("recbar").style.width = "0%";
+        } else if (recState === "count") {
+          trials.pop(); trialSeq--;
+          recState = "idle";
+          $("btn-rec").textContent = "3초 뒤 기록";
+          $("btn-rec").classList.remove("rec");
+          $("count").textContent = "준비";
+          $("reclamp").classList.remove("on");
+        } else {
+          stopRec();
+        }
+      };
+      function stopRec() {
+        recState = "idle";
+        $("btn-rec").textContent = "3초 뒤 기록";
+        $("btn-rec").classList.remove("rec");
+        $("count").textContent = "완료";
+        $("recbar").style.width = "0%";
+        $("reclamp").classList.remove("on");
+        renderSummary();
+      }
+      function tickRec(d) {
+        const now = Date.now();
+        if (recState === "count") {
+          const left = Math.ceil((countEnd - now) / 1000);
+          $("count").textContent = left > 0 ? left : "기록 중";
+          if (now >= countEnd) {
+            recState = "rec"; recStart = now;
+            recEnd = recTrial.dur > 0 ? now + recTrial.dur * 1000 : 0;
+            $("btn-rec").textContent = "기록 정지";
+            $("btn-rec").classList.add("rec");
+            $("reclamp").classList.add("on");
+          }
+          return;
+        }
+        const targets = recMode === "BOTH" ? ARMS : [recMode];
+        const frozen = d.sensors.filter((s) => s.frozen || !s.ok).map((s) => s.id);
+        for (const a of targets) {
+          const bad = SENSOR_IDS[a].some((s) => frozen.includes(s));
+          rows.push(makeRow(a, d, now, bad));
+          recTrial.n++;
+          if (bad) recTrial.bad++;
+        }
+        $("log-count").textContent = rows.length + "행 기록됨";
+        $("rec-text").textContent =
+          (recMode === "BOTH" ? "양팔" : ARM_KO[recMode]) + " · " + recTrial.label +
+          " · " + ((now - recStart) / 1000).toFixed(1) + "초";
+        if (recEnd) {
+          $("recbar").style.width = Math.min(100, ((now - recStart) / (recEnd - recStart)) * 100) + "%";
+          $("count").textContent = ((recEnd - now) / 1000).toFixed(1) + "초";
+          if (now >= recEnd) stopRec();
+        } else {
+          $("count").textContent = ((now - recStart) / 1000).toFixed(1) + "초";
+        }
+      }
+      function makeRow(arm, d, now, bad) {
+        const x = d.arms[arm] || {}, q = x.quat || {}, r = x.az_ref || null;
+        const st = {}; d.sensors.forEach((s) => (st[s.id] = s));
+        const ids = SENSOR_IDS[arm];
+        const g = (i, k) => (st[ids[i]] ? st[ids[i]][k] : "");
+        const qq = (k, i) => (q[k] ? q[k][i].toFixed(6) : "");
+        return {
+          arm, label: recTrial.label, trial: recTrial.id,
+          t: ((now - recStart) / 1000).toFixed(2),
+          pose: x.pose, elev: x.elev, az: x.az, mag: x.mag,
+          flex: x.flex ?? "", flex_drift: x.flex_drift,
+          drift: x.drift ?? "", anchor_n: x.anchor_n,
+          az_side: x.az_side ?? "", bound_lo: x.bound_lo ?? "", bound_hi: x.bound_hi ?? "",
+          az_margin: x.az_margin ?? "", profile: x.profile ?? "",
+          az_ref_fwd: r ? r.fwd : "", az_ref_diag: r ? r.diag : "", az_ref_side: r ? r.side : "",
+          cal_age: x.cal_age ?? "", sh_tilt: x.sh_tilt ?? "",
+          sh_w: qq("sh",0), sh_x: qq("sh",1), sh_y: qq("sh",2), sh_z: qq("sh",3),
+          ua_w: qq("ua",0), ua_x: qq("ua",1), ua_y: qq("ua",2), ua_z: qq("ua",3),
+          fa_w: qq("fa",0), fa_x: qq("fa",1), fa_y: qq("fa",2), fa_z: qq("fa",3),
+          sh_hz: g(0,"hz"), ua_hz: g(1,"hz"), fa_hz: g(2,"hz"),
+          sh_age: g(0,"age"), ua_age: g(1,"age"), fa_age: g(2,"age"),
+          quality: bad ? "BAD" : "OK",
+        };
+      }
+
+      window.undoTrial = () => {
+        if (!trials.length) return;
+        const t = trials.pop();
+        rows = rows.filter((r) => r.trial !== t.id);
+        $("log-count").textContent = rows.length + "행 기록됨";
+        renderSummary();
+      };
+      window.clearLog = () => {
+        if (rows.length && !confirm("수집한 데이터를 모두 지웁니다. 계속할까요?")) return;
+        rows = []; trials = []; trialSeq = 0;
+        $("log-count").textContent = "0행 기록됨";
+        renderSummary();
+      };
+
+      function renderSummary() {
+        const by = {};
+        for (const r of rows) {
+          const k = r.arm + "|" + r.label;
+          if (!by[k]) by[k] = { arm: r.arm, label: r.label, n: 0, bad: 0, az: [], mgn: [], trials: {} };
+          const g = by[k];
+          g.n++; g.trials[r.trial] = 1;
+          if (r.quality === "BAD") g.bad++;
+          if (r.az != null && r.mag >= 0.35) g.az.push(r.az);
+          if (r.az_margin !== "") g.mgn.push(Number(r.az_margin));
+        }
+        const keys = Object.keys(by).sort();
+        const tbl = $("sum-tbl");
+        if (!keys.length) { tbl.innerHTML = ""; }
+        else {
+          let h = "<tr><th>팔</th><th>라벨</th><th>시도</th><th>행</th><th>az 평균</th><th>az 범위</th><th>최소여유</th></tr>";
+          for (const k of keys) {
+            const g = by[k];
+            h += `<tr class="${g.bad ? "bad" : ""}"><td>${ARM_KO[g.arm]}</td><td>${g.label}</td>` +
+              `<td>${Object.keys(g.trials).length}</td><td>${g.n}</td>` +
+              `<td>${fx(mean(g.az))}</td>` +
+              `<td>${g.az.length ? fx(Math.min(...g.az)) + "~" + fx(Math.max(...g.az)) : "–"}</td>` +
+              `<td>${g.mgn.length ? fx(Math.min(...g.mgn)) : "–"}</td></tr>`;
+          }
+          tbl.innerHTML = h;
+        }
+        $("btn-csv").disabled = !rows.length;
+        $("btn-clear").disabled = !rows.length;
+        $("btn-undo").disabled = !trials.length;
+      }
+      const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+      const fx = (v) => (v == null ? "–" : v.toFixed(1));
+
+      window.downloadCsv = () => {
+        if (!rows.length) { setStatus("기록된 행이 없습니다.", true); return; }
+        const lines = [COLS.join(",")];
+        for (const r of rows) {
+          lines.push(COLS.map((c) => {
+            let v = r[c];
+            if (v == null) return "";
+            v = String(v);
+            return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+          }).join(","));
+        }
+        const p = (n) => String(n).padStart(2, "0");
+        const dt = new Date();
+        const name = "mocap_LR_" + dt.getFullYear() + p(dt.getMonth() + 1) + p(dt.getDate()) +
+          "_" + p(dt.getHours()) + p(dt.getMinutes()) + ".csv";
+        const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+      };
+
+      setArm("L");
+      renderSummary();
+      toggleConn();
+    </script>
+  </body>
+</html>
