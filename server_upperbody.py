@@ -1,29 +1,48 @@
 """
-웨어러블 모션캡처 중앙 서버 v6.0 — 양팔 통합
-============================================
-왼팔 서버 v5.3 과 오른팔 서버를 하나로 합쳤다. 센서 6개(양팔 각각 어깨/상완/전완)를
-한 프로세스에서 받고, 교정과 앵커는 팔마다 완전히 따로 관리한다.
-
-주의: 합칠 때 발견한 것
-  업로드된 server_R.py 는 v5.0 이었다. 즉 오른팔 쪽에는 v5.1~v5.3 에서 고친 내용이
-  하나도 들어가 있지 않았다. 특히 자세 판정이 옛날 비율 방식(az_side 에 1/3, 2/3,
-  뒤 판정 1.45 를 곱하는 것)이라, 왼팔 8/17 데이터에서 옆으로90 187샘플 중 94개를
-  '뒤로'로 잘못 판정했던 그 로직이다. 그래서 이 파일은 양쪽 팔 모두 v5.3 로직을
-  쓴다. 오른팔도 이제 scaled 기준각 / 히스테리시스 / az_margin 을 전부 쓴다.
-
-팔 사이에서 공유하는 것과 나누는 것
-  공유: 웹소켓 포트, 센서 수신 통계, 프리즈 검출
-  분리: 교정값(calib_L.json / calib_R.json), 앵커, 자세 판정 이력, 판정 튜닝값
-
-방위각 계산은 좌우와 무관하다. e_lat 을 '옆으로' 자세에서 관측한 방향으로부터
-만들기 때문에 az_side 는 팔에 상관없이 양수로 나온다. 화면상 좌우 반전은
-수집기/뷰어의 DIAL_SIDE / SIDE 상수가 담당한다.
+웨어러블 모션캡처 중앙 서버 v6.1 — 양팔 통합 + 보드 원격 진단
+============================================================
+센서 6개(양팔 각각 어깨/상완/전완)를 한 프로세스에서 받고,
+교정과 앵커는 팔마다 완전히 따로 관리한다.
 
 프로토콜
   센서   {"id":"L_UPPERARM","qw":..,"qx":..,"qy":..,"qz":..}
   보드   {"cmd":"zero","arm":"L"}            src 없음 -> 앵커만 재설정
   UI     {"cmd":"zero","arm":"L","src":"ui"} src 있음 -> 차렷 영점 다시 잡기
-  방송   {"v":6,"sensors":[..6..],"arms":{"L":{..},"R":{..}}}
+  방송   {"v":6,"sensors":[..6..],"arms":{"L":{..},"R":{..}}}   ← 뷰어에게만
+
+  [v6.1] 서버 -> 보드
+         {"cmd":"boardcal","target":"ALL"}     자이로 0점 재측정
+         {"cmd":"boardcheck","target":"ALL"}   흔들림/잔여 바이어스 진단
+         {"cmd":"boarddrift","target":"ALL"}   30초 실측 표류
+         target 은 "ALL" 또는 보드 이름(SHOULDER_BOARD / ARM_BOARD_L / ARM_BOARD_R)
+
+         보드 -> 서버
+         {"type":"hello","board":..,"fw":..,"cal":[{"id":..,"sd":..,"out":..,
+                                                    "n":..,"ok":..}]}
+         {"type":"diag","board":..,"kind":"check"|"drift",
+          "d":[{"id":..,"sd":..,"bias":..,"out":..,"drift":..}]}
+
+────────────────────────────────────────────────────────────────
+v6.1 변경점
+  [FIX-A] 보드에게 analyze() 프레임을 보내지 않는다.
+          v6.0 은 broadcast_loop 가 connected 전체에 보냈다. 보드 펌웨어는
+          WStype_TEXT 를 처리하지 않으므로 순수한 낭비였고, 센서 6개 프레임은
+          3KB 에 가까워 보드 3대면 초당 90KB 를 헛되이 실어보냈다.
+          하체 서버(v1.3)가 이미 쓰던 board_sockets 방식을 그대로 가져왔다.
+
+  [FIX-B] 보드 자이로 0점을 서버 콘솔에서 실행하고 결과를 판정한다.
+          보드는 원래 cal 직후 sendHello() 로 결과를 보내고 있었는데
+          서버가 그걸 버리고 있었다. 이제 저장해두고 표로 보여준다.
+            bcal   [L|R|SH|all]   자이로 0점 재측정 -> 흔들림/이상치 판정
+            bcheck [L|R|SH|all]   오프셋 유지한 채 잔여 바이어스 진단
+            bdrift [L|R|SH|all]   30초 적분해 실제 표류량 측정
+            boards                마지막 결과를 다시 표로 출력
+
+          ⚠ 보드 펌웨어에 웹소켓 명령 수신부가 있어야 동작한다.
+            (esp32_*_v1.4 이상. v1.3 은 WStype_TEXT 를 무시한다)
+
+  [FIX-C] 콘솔이 stdin 없이 실행돼도 죽지 않는다 (하체 서버 FIX-2 와 동일).
+────────────────────────────────────────────────────────────────
 """
 
 import asyncio
@@ -43,7 +62,6 @@ PORT = 8765
 
 # ── 센서 배치 ──────────────────────────────────────────────────
 # 몸통 센서가 하나뿐이라면 두 팔의 "shoulder" 를 같은 id 로 두면 된다.
-# 그러면 한 센서가 양팔의 몸통 기준으로 함께 쓰인다. 교정은 팔마다 따로 잡는다.
 ARM_SENSORS = {
     "L": {"shoulder": "L_SHOULDER", "upperarm": "L_UPPERARM", "forearm": "L_FOREARM"},
     "R": {"shoulder": "R_SHOULDER", "upperarm": "R_UPPERARM", "forearm": "R_FOREARM"},
@@ -52,6 +70,32 @@ ARM_NAME = {"L": "왼팔", "R": "오른팔"}
 ARM_ORDER = ["L", "R"]
 CALIB_FILE = {"L": "calib_L.json", "R": "calib_R.json"}
 
+# ── [v6.1] 보드 진단 ───────────────────────────────────────────
+# 보드 이름 -> 사람이 읽는 이름. 펌웨어의 BOARD_NAME 과 일치해야 한다.
+BOARD_NAME_KR = {
+    "SHOULDER_BOARD": "어깨 보드",
+    "ARM_BOARD_L": "왼팔 보드",
+    "ARM_BOARD_R": "오른팔 보드",
+}
+# 콘솔에서 쓰는 짧은 별명 -> BOARD_NAME
+BOARD_ALIAS = {
+    "sh": "SHOULDER_BOARD", "shoulder": "SHOULDER_BOARD", "어깨": "SHOULDER_BOARD",
+    "l": "ARM_BOARD_L", "left": "ARM_BOARD_L", "왼": "ARM_BOARD_L",
+    "왼팔": "ARM_BOARD_L",
+    "r": "ARM_BOARD_R", "right": "ARM_BOARD_R", "오른": "ARM_BOARD_R",
+    "오른팔": "ARM_BOARD_R",
+}
+
+# 통과 기준. 여기 숫자만 바꾸면 판정이 바뀐다.
+BOARD_SD_MAX_DPS    = 0.50   # cal 중 흔들림 (도/초). 이 아래여야 0점이 유효
+BOARD_OUT_MAX_PCT   = 0.0    # 읽기 오류 비율 (%). v1.3 펌웨어면 0.0 이 정상값
+BOARD_BIAS_MAX_DPS  = 0.50   # 잔여 바이어스 (도/초, bcheck)
+BOARD_DRIFT_MAX_DPM = 10.0   # 실측 표류 (도/분, bdrift)
+
+BOARD_CAL_WAIT_SEC   = 14.0  # bcal 후 결과를 기다리는 시간
+BOARD_CHECK_WAIT_SEC = 12.0
+BOARD_DRIFT_WAIT_SEC = 75.0  # 센서당 30초 x 2 + 여유
+
 # ── 동작 설정 (양팔 공통) ──────────────────────────────────────
 AUTO_LOAD_CALIB   = False   # 시작 시 이전 교정 적용 안 함. 콘솔 load 로만 적용.
 FRESH_SEC         = 0.5
@@ -59,31 +103,27 @@ REST_ELEV_DEG     = 25.0    # 이 아래면 REST
 ANCHOR_ELEV_DEG   = 18.0    # 앵커는 더 확실히 내려왔을 때만 (히스테리시스)
 ANCHOR_HOLD_SEC   = 0.5
 ANCHOR_MAX_RATE   = 0.10    # 앵커 보정이 초당 움직일 수 있는 최대 각도
+
 # ── 앵커(요 표류 보정) 설정 ────────────────────────────────────
-#
 #  앵커는 팔을 내렸을 때 w_ua(=위팔 장축에 수직인 임의 축)의 수평 방위를 재서
 #  그 변화를 표류로 간주한다. 그런데 팔을 내리면 위팔 장축이 거의 수직이라
 #  w_ua 는 수평면에 눕고, 그 방위는 곧 '위팔의 장축 회전(손바닥 방향)'이 된다.
-#  즉 팔을 내릴 때마다 손바닥 방향이 조금씩 달라지면 앵커가 그걸 표류로 착각한다.
+#  즉 팔을 내릴 때마다 손바닥 방향이 달라지면 앵커가 그걸 표류로 착각한다.
 #
-#  2026-08-18 19시 세션(749샘플)에서 실제로 그 일이 일어났다.
+#  2026-08-18 19시 세션(749샘플) 실측
 #    앵커θ  -6.6 -> +6.6 -> +10.0  (3.5분간 한 방향으로 16.6도)
-#    원본 az 는 추세가 없었다 (앞 -3.0/+5.3/+4.7, 대각 20.7/25.8/22.7,
-#                              옆 44.8/54.3/44.5)
-#    라벨별 시도 간 편차 합계: 앵커 적용 40.4도 / 원본 23.2도
-#    판정 정확도: 앵커 적용 655/749 (최소여유 0.6도) / 앵커 끔 749/749 (4.3도)
-#  앵커가 도움이 아니라 방해였다. 그래서 기본을 damped 로 낮추고, 자세 변화로
-#  인한 큰 점프는 아예 표류로 인정하지 않으며, 총 보정량에 상한을 둔다.
+#    원본 az 는 추세가 없었다.
+#    판정 정확도: 앵커 적용 655/749 / 앵커 끔 749/749
+#  앵커가 도움이 아니라 방해였다. 그래서 기본을 damped 로 낮췄다.
 #
-#  off    : 보정하지 않는다. 세션이 짧고(5분 이내) 판정이 흔들리면 이게 가장 안전.
-#  damped : 아래 게이트를 모두 통과한 관측만, 느리게, 상한 안에서 반영 (기본)
+#  off    : 보정하지 않는다. 세션이 짧고(5분 이내) 판정이 흔들리면 가장 안전.
+#  damped : 게이트를 모두 통과한 관측만, 느리게, 상한 안에서 반영 (기본)
 #  full   : 예전 동작 (게이트 없음, ANCHOR_MAX_RATE 만 적용)
 ANCHOR_MODE          = "damped"
-ANCHOR_DEADBAND_DEG  = 1.5   # 이보다 작은 차이는 잡음으로 보고 건드리지 않는다
-ANCHOR_JUMP_REJECT   = 8.0   # 현재 보정값에서 이만큼 떨어진 관측은 '자세가 바뀐 것'
-                             # 으로 보고 버린다 (표류는 이렇게 갑자기 안 생긴다)
-ANCHOR_MAX_THETA     = 12.0  # 총 보정량 상한. 여기 닿으면 표류가 아니라 교정 문제다
-ANCHOR_MIN_OBS       = 5     # 이만큼 관측이 쌓여야 보정을 시작한다
+ANCHOR_DEADBAND_DEG  = 1.5
+ANCHOR_JUMP_REJECT   = 8.0
+ANCHOR_MAX_THETA     = 12.0
+ANCHOR_MIN_OBS       = 5
 GRAVITY_EMA_ALPHA = 0.3
 
 FREEZE_N          = 8       # 같은 쿼터니언이 8회(약 0.8초) 반복되면 죽은 센서
@@ -95,53 +135,27 @@ MIN_MAG           = 0.30    # 이보다 작으면 수평 방향 자체가 정의
 MARGIN_WARN_DEG   = 5.0     # 경계까지 이만큼도 안 남으면 아슬아슬하다고 표시
 POSE_HYST_DEG     = 3.0     # 경계 근처 떨림 방지 이력
 
-# 팔꿈치 포락선 여유(도). 교정 오차·잡음으로 클램프가 raw 를 물고 떠는 것을 막는다.
+# 팔꿈치 포락선 여유(도).
 ELBOW_ENVELOPE_TOL = 5.0
 
 # 차렷인데 팔꿈치가 이만큼 굽어 있다고 나오면 팔꿈치 영점이 잘못된 것이다.
 FLEX_REST_MIN = 150.0
 
 # ── 자세 판정 튜닝 (팔마다 따로) ───────────────────────────────
-#
-#  왼팔 실측 2회 (mocap_L_20260817_2258.csv 559샘플 / mocap_L_20260818_1711.csv 558샘플)
-#    앞으로90  az  -2.8~+9.0 (평균 3.13)  /  -6.6~-3.8 (평균 -5.30)
-#    대각선90  미수집                     /  +23.2~+24.5 (평균 23.60)
-#    옆으로90  az +39.1~+47.7 (평균 43.25) / +49.5~+51.6 (평균 50.39)
-#
-#  두 세션에서 찾은 불변량
-#    실제 앞->옆 벌어짐(span)은 교정 캡처 az_side 보다 항상 크다.
-#      8/17  span 40.12 / az_side 30.53 = 1.314
-#      8/18  span 55.68 / az_side 42.41 = 1.313
-#    az_side 자체는 30.5 -> 42.4 로 크게 달랐는데 비율은 같다. 절대 각도를 박아두면
-#    다음 세션에 어긋나지만 이 비율은 살아남는다. 대각선은 구간의 정확히 가운데다
-#    (8/18 실측 0.519).
-#
-#  !! 오른팔은 아직 이 검증을 안 했다. 아래 R 값은 왼팔에서 얻은 것을 그대로
-#     복사해 둔 것이다. 오른팔로 앞/옆/대각을 한 번 수집해서 span/az_side 를
-#     확인하고, 다르면 R 쪽 SPAN_K 만 고치면 된다. 수집기가 CSV 에 az_side 와
-#     az_ref 를 남기므로 계산은 바로 된다.
 TUNING_DEFAULT = {
     "SPAN_K":     1.250,  # 실제 앞-옆 벌어짐 / 교정 캡처 az_side
-                          # !! 이 값은 안정적이지 않다. 3세션 실측이
-                          #    8/17 1.314 / 8/18 17시 1.313 / 8/18 19시 1.068
-                          #    로 갈렸다. 앞의 두 번이 우연히 일치했을 뿐이다.
-                          #    교정 때 얼마나 덜 벌리고 잡았는지에 달린 값이라
-                          #    사람 습관에 따라 매번 달라진다.
-                          #    1.250 은 3세션 최악 여유가 가장 큰 지점이지만
-                          #    (1.3도 -> 2.1도), 근본 해결은 learn 명령이다.
-                          #    자세를 실제로 잡고 learn fwd/diag/side 를 입력하면
-                          #    이 계수를 아예 거치지 않는다.
+                          # 3세션 실측이 1.314 / 1.313 / 1.068 로 갈렸다.
+                          # 근본 해결은 learn 명령이다.
     "DIAG_FRAC":  0.52,   # 앞->옆 구간에서 대각선의 위치
-    "DIAG_HALF":  0.42,   # 대각 구간이 이웃 기준각 쪽으로 뻗는 비율 (0.5=중간점)
-    "DIAG_MIN_WIDTH":  14.0,   # 대각선 구간 최소 폭 (도)
-    "BACK_MARGIN_DEG": 25.0,   # 앞 안쪽 / 옆 바깥쪽으로 이만큼 더 나가야 '뒤'
+    "DIAG_HALF":  0.42,   # 대각 구간이 이웃 기준각 쪽으로 뻗는 비율
+    "DIAG_MIN_WIDTH":  14.0,
+    "BACK_MARGIN_DEG": 25.0,
 }
 TUNING_OVERRIDE = {
     "L": {},
-    "R": {},   # 오른팔 실측 후 여기에 {"SPAN_K": ...} 식으로 덮어쓴다
+    "R": {},
 }
 
-# 절대 각도로 고정하고 싶을 때 쓰는 값 (profile abs). 왼팔 8/18 세션 실측 평균.
 PROFILE_ABS = {
     "L": {"fwd": -5.3, "diag": 23.6, "side": 50.4},
     "R": {"fwd": -5.3, "diag": 23.6, "side": 50.4},   # 미검증
@@ -152,14 +166,24 @@ POSE_FWD  = "앞으로 90도"
 POSE_DIAG = "대각선 90도"
 POSE_SIDE = "옆으로 90도"
 
-# ── 전역 수신 상태 (팔 구분 없음) ──────────────────────────────
+# ── 전역 수신 상태 ─────────────────────────────────────────────
 latest = {}
 connected = set()
 gravity_ema = {}
 gravity_cache = {}   # sensor_id -> (quat, 평활 결과). 프레임당 1회 갱신 보장
 sensor_stat = {}
-history = {}          # sensor_id -> deque[(t, quat)]
+history = {}         # sensor_id -> deque[(t, quat)]
 notes = {"msg": "", "t": 0.0}
+
+# [v6.1] 보드/뷰어 구분. 쿼터니언을 보낸 소켓 = 보드.
+board_sockets = set()
+subscribed = set()      # {"cmd":"subscribe"} 를 보내면 보드 분류에서 빠진다
+socket_since = {}
+CLASSIFY_GRACE = 1.0
+
+# [v6.1] 보드가 보고한 마지막 진단 결과
+#   {BOARD_NAME: {"fw":.., "t":.., "cal":[..], "check":[..], "drift":[..]}}
+board_state = {}
 
 
 def all_sensor_ids():
@@ -234,9 +258,8 @@ def gravity_smoothed(sensor_id, q):
 
     예전에는 한 프레임 안에서 elevation_deg 와 elbow_flex 가 상완 EMA 를 각각
     갱신해서 상완만 두 번(실효 alpha 0.51), 전완은 한 번(0.30) 진행됐다.
-    두 마디의 지연이 달라지니 팔을 곧게 편 채로 팔 전체만 들었다 내려도
-    |t_fa - t_ua| 가 12도까지 벌어졌고, 그게 아래 포락선에 그대로 들어가
-    팔꿈치가 12도 굽은 것처럼 보고됐다.
+    두 마디의 지연이 달라지니 팔을 곧게 편 채로 들었다 내려도
+    |t_fa - t_ua| 가 12도까지 벌어져 팔꿈치가 굽은 것처럼 보고됐다.
     """
     c = gravity_cache.get(sensor_id)
     if c is not None and c[0] == q:
@@ -349,7 +372,8 @@ def sensor_line(now=None):
     tail = []
     for side in ARM_ORDER:
         a = arms[side]
-        tail.append(f"{side} {a.anchor['theta']:+5.1f}도" if a.ready() else f"{side} 미교정")
+        tail.append(f"{side} {a.anchor['theta']:+5.1f}도" if a.ready()
+                    else f"{side} 미교정")
     return "  ".join(parts) + " | " + "  ".join(tail)
 
 
@@ -390,7 +414,8 @@ class Arm:
         c = self.calib
         return {"rest": c["u_ua"] is not None, "fwd": c["e_fwd"] is not None,
                 "side": c["e_lat"] is not None, "diag": c["az_diag"] is not None,
-                "twist": c["a_ua"] is not None, "anchor": self.anchor["ref"] is not None}
+                "twist": c["a_ua"] is not None,
+                "anchor": self.anchor["ref"] is not None}
 
     # ── 기하 ──
     def horizontal_azimuth(self, q_sh, q_ua, axis):
@@ -428,23 +453,17 @@ class Arm:
     def elbow_flex(self, q_ua, q_fa):
         """팔꿈치 각도. 180 = 완전히 편 상태, 굽힐수록 줄어든다.
 
-        raw(상대 쿼터니언에서 직접 구한 관절각)가 본래의 측정값이고, 중력으로 만든
-        [lo, hi] 포락선은 요 표류로 raw 가 틀어졌을 때를 잡기 위한 안전장치다.
+        raw(상대 쿼터니언에서 직접 구한 관절각)가 본래의 측정값이고, 중력으로
+        만든 [lo, hi] 포락선은 요 표류로 raw 가 틀어졌을 때를 잡는 안전장치다.
 
-        그런데 포락선을 '평활된' 중력으로 만들면 raw 는 순간값, 포락선은 지연값이
-        되어 시간축이 어긋난다. 빠르게 굽혔다 펴면 raw 는 곧바로 0 으로 돌아오는데
-        포락선은 아직 굽은 자세를 가리켜, 클램프가 raw 를 덮어쓰고 120~130 도대로
-        튀었다가 EMA 가 따라잡으면 170 도로 돌아왔다. 포락선을 순간 중력으로
-        바꾸면 raw 와 같은 시점이 되어 이 반동이 사라진다.
-
-        추가로 ELBOW_ENVELOPE_TOL 만큼 포락선을 넓혀, 교정 오차나 잡음으로
-        포락선이 raw 를 아슬아슬하게 물고 떠는 것을 막는다.
+        포락선은 '순간' 중력으로 만든다. 평활된 중력을 쓰면 raw 는 순간값,
+        포락선은 지연값이라 시간축이 어긋나서, 빠르게 굽혔다 펴면 클램프가
+        raw 를 덮어쓰고 120~130 도대로 튀었다가 EMA 가 따라잡으면 돌아왔다.
         """
         c = self.calib
         if c["u_ua"] is None or c["u_fa"] is None:
             return None, 0.0
 
-        # 포락선은 순간 중력으로 (raw 와 시점을 맞춘다)
         t_ua = angle_between(gravity_in_sensor(q_ua), c["u_ua"])
         t_fa = angle_between(gravity_in_sensor(q_fa), c["u_fa"])
 
@@ -460,7 +479,7 @@ class Arm:
             lo, hi = hi, lo
 
         tol = ELBOW_ENVELOPE_TOL
-        drift_min = max(0.0, lo - raw, raw - hi)          # 여유 적용 전 실제 위반량
+        drift_min = max(0.0, lo - raw, raw - hi)   # 여유 적용 전 실제 위반량
         lo = max(0.0, lo - tol)
         hi = min(180.0, hi + tol)
 
@@ -470,12 +489,7 @@ class Arm:
 
     # ── 판정 기준각 / 경계 ──
     def pose_refs(self):
-        """자세별 기준 방위각(도). (앞, 대각, 옆)
-
-        scaled : 교정 캡처 az_side 에 SPAN_K 를 곱해 실제 벌어짐을 복원 (기본)
-        abs    : 절대 각도를 그대로
-        cal    : 교정 캡처값을 보정 없이 그대로 (예전 v5.0 방식)
-        """
+        """자세별 기준 방위각(도). (앞, 대각, 옆)"""
         mode = self.pose["mode"]
         if mode == "abs":
             p = self.pose["abs"]
@@ -622,8 +636,7 @@ class Arm:
                 a["rate"] = 0.0
                 return
             gap = target - a["theta"]
-            # 2) 갑자기 크게 벌어진 관측은 표류가 아니라 '팔을 내린 자세가 달라진 것'
-            #    이다. 표류는 이렇게 튀지 않는다. 버린다.
+            # 2) 갑자기 크게 벌어진 관측은 표류가 아니라 자세가 달라진 것이다
             if abs(gap) > ANCHOR_JUMP_REJECT:
                 a["rate"] = 0.0
                 a["rejects"] = a.get("rejects", 0) + 1
@@ -633,14 +646,12 @@ class Arm:
                 a["rate"] = 0.0
                 return
 
-        # 급변 방지: 팔을 내린 채 위팔을 살짝 돌리기만 해도 w_ua 방위가 크게 튄다.
         dt = now - (a["prev"] or now)
         step = ANCHOR_MAX_RATE * max(dt, 1e-3)
         delta = max(-step, min(step, target - a["theta"]))
 
         new_theta = a["theta"] + delta
-        # 4) 총 보정량 상한. 여기 닿을 만큼 밀렸으면 표류가 아니라 교정이 어긋난 것
-        #    이므로, 계속 따라가지 말고 멈추고 사람에게 알린다.
+        # 4) 총 보정량 상한. 여기 닿았으면 표류가 아니라 교정이 어긋난 것이다.
         if ANCHOR_MODE != "full" and abs(new_theta) > ANCHOR_MAX_THETA:
             new_theta = math.copysign(ANCHOR_MAX_THETA, new_theta)
             a["capped"] = True
@@ -722,7 +733,7 @@ class Arm:
         self.calib["u_fa"] = qrot(qconj(q_rel), self.calib["u_ua"])
         self.calib["a_fa"] = qrot(qconj(q_rel), self.arm_axis())
         self.save_calib()
-        note(f"[ok] {self.name} 팔꿈치 영점 완료. 지금 자세가 완전 펴짐(0도 굽힘)입니다.")
+        note(f"[ok] {self.name} 팔꿈치 영점 완료. 지금 자세가 완전 펴짐입니다.")
         return True
 
     def capture_dir(self, kind):
@@ -737,8 +748,8 @@ class Arm:
 
         tilt = self.torso_tilt_deg(q_sh)
         if tilt is not None and tilt > TILT_WARN_DEG:
-            note(f"[거부] {self.name} 몸통 기준이 {tilt:.0f}도 기울었습니다. 어깨 센서가 "
-                 f"팔을 따라 움직이고 있는지 확인하세요. 몸통에 고정해야 합니다.")
+            note(f"[거부] {self.name} 몸통 기준이 {tilt:.0f}도 기울었습니다. 어깨 "
+                 f"센서가 팔을 따라 움직이는지 확인하세요. 몸통에 고정해야 합니다.")
             return False
 
         d = unit(qrot(qrel(q_sh, q_ua), self.arm_axis()))
@@ -755,7 +766,7 @@ class Arm:
             if c["e_lat"] is not None and c["az_side"] is not None:
                 new_lat = unit(sub(c["e_lat"], scale(h, dot(c["e_lat"], h))))
                 if norm(new_lat) < 1e-6:
-                    note(f"[거부] {self.name} 앞 방향 재설정 실패. 옆 방향과 너무 가깝습니다.")
+                    note(f"[거부] {self.name} 앞 방향 재설정 실패. 옆과 너무 가깝습니다.")
                     return False
                 c["e_fwd"] = h
                 c["e_lat"] = new_lat
@@ -786,7 +797,6 @@ class Arm:
             self.cal_time = time.time()
             self.save_calib()
 
-            # 캡처값은 실제 녹화 자세보다 늘 덜 벌어져 있다(왼팔 2세션 모두 계수 1.31).
             b = self.bounds()
             if abs(s) < 20.0:
                 note(f"[경고] {self.name} 앞과 옆의 벌어짐이 {abs(s):.0f}도뿐입니다. "
@@ -867,7 +877,7 @@ class Arm:
         self.clear_anchor()
         self.pose["last"] = None
         clear_gravity(self.sensors.values())
-        note(f"[ok] {self.name} 교정을 전부 지웠습니다. 1 차렷 영점부터 다시 시작하세요.")
+        note(f"[ok] {self.name} 교정을 전부 지웠습니다. 1 차렷 영점부터 다시.")
 
     # ── 분석 ──
     def analyze(self, now, frozen_ids):
@@ -899,7 +909,8 @@ class Arm:
             "anchor_rejects": self.anchor.get("rejects", 0),
             "anchor_capped": bool(self.anchor.get("capped")),
             "auto_anchor": self.anchor["enabled"],
-            "cal_age": (None if self.cal_time is None else round(now - self.cal_time)),
+            "cal_age": (None if self.cal_time is None
+                        else round(now - self.cal_time)),
             "calib": self.calib_state(), "quat": {}, "warn": [],
         }
 
@@ -955,8 +966,8 @@ class Arm:
         if (elev < REST_ELEV_DEG and out["flex"] is not None
                 and out["flex"] < FLEX_REST_MIN):
             out["warn"].append("elbow_zero")
-            out["status"] = (f"차렷인데 팔꿈치가 {180 - out['flex']:.0f}도 굽은 것으로 "
-                             f"나옵니다. '팔꿈치 영점'을 팔을 편 상태에서 다시 잡으세요.")
+            out["status"] = (f"차렷인데 팔꿈치가 {180 - out['flex']:.0f}도 굽은 "
+                             f"것으로 나옵니다. 팔을 편 상태에서 영점을 다시 잡으세요.")
             return out
 
         # 교정이 이 세션 것이 맞는지 실시간 확인
@@ -968,8 +979,8 @@ class Arm:
 
         if tilt is not None and tilt > TILT_WARN_DEG:
             out["warn"].append("torso_tilt")
-            out["status"] = (f"몸통 기준이 {tilt:.0f}도 기울었습니다. 어깨 센서가 팔을 "
-                             f"따라 움직이면 앞/옆 판정이 어긋납니다.")
+            out["status"] = (f"몸통 기준이 {tilt:.0f}도 기울었습니다. 어깨 센서가 "
+                             f"팔을 따라 움직이면 앞/옆 판정이 어긋납니다.")
             return out
 
         if self.anchor["ref"] is None:
@@ -977,7 +988,7 @@ class Arm:
         elif self.anchor.get("capped"):
             out["warn"].append("anchor_capped")
             out["status"] = (f"앵커 보정이 상한 {ANCHOR_MAX_THETA:.0f}도에 닿았습니다. "
-                             f"이건 표류가 아니라 교정이 어긋난 것입니다. "
+                             f"표류가 아니라 교정이 어긋난 것입니다. "
                              f"'2 앞으로'를 다시 잡으세요.")
         return out
 
@@ -995,8 +1006,198 @@ def analyze():
         "t": round(now, 3),
         "sensors": sensors,
         "active": active["arm"],
+        "boards": board_summary(),
         "arms": {side: arms[side].analyze(now, frozen_ids) for side in ARM_ORDER},
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+#  [v6.1] 보드 진단
+# ═══════════════════════════════════════════════════════════════
+def board_pick(token):
+    """'l' / 'r' / 'sh' / 'all' / '' -> 대상 BOARD_NAME 목록 ([] = 전체)."""
+    t = (token or "").strip().lower()
+    if not t or t in ("all", "전체", "다", "both"):
+        return None            # None = ALL
+    name = BOARD_ALIAS.get(t)
+    return [name] if name else None
+
+
+def cal_verdict(e):
+    """cal 결과 한 줄에 대한 통과/불합격 판정."""
+    sd = e.get("sd")
+    out = e.get("out")
+    reasons = []
+    if sd is None:
+        reasons.append("흔들림 값 없음")
+    elif sd > BOARD_SD_MAX_DPS:
+        reasons.append(f"흔들림 {sd:.3f} > {BOARD_SD_MAX_DPS}")
+    if out is None:
+        reasons.append("이상치 값 없음")
+    elif out > BOARD_OUT_MAX_PCT:
+        reasons.append(f"이상치 {out:.1f}% > {BOARD_OUT_MAX_PCT}%")
+    return (not reasons), reasons
+
+
+def diag_verdict(e, kind):
+    """check / drift 결과 한 줄 판정."""
+    reasons = []
+    if kind == "check":
+        b = e.get("bias")
+        o = e.get("out")
+        if b is None:
+            reasons.append("바이어스 값 없음")
+        elif b > BOARD_BIAS_MAX_DPS:
+            reasons.append(f"잔여 바이어스 {b:.3f} > {BOARD_BIAS_MAX_DPS}")
+        if o is not None and o > BOARD_OUT_MAX_PCT:
+            reasons.append(f"이상치 {o:.1f}% > {BOARD_OUT_MAX_PCT}%")
+    else:
+        d = e.get("drift")
+        if d is None:
+            reasons.append("표류 값 없음")
+        elif d > BOARD_DRIFT_MAX_DPM:
+            reasons.append(f"표류 {d:.2f} 도/분 > {BOARD_DRIFT_MAX_DPM}")
+    return (not reasons), reasons
+
+
+def board_summary():
+    """뷰어로 내보낼 간단한 요약."""
+    out = {}
+    now = time.time()
+    for name, st in board_state.items():
+        rows = st.get("cal") or []
+        oks = [cal_verdict(e)[0] for e in rows]
+        out[name] = {
+            "fw": st.get("fw"),
+            "age": round(now - st.get("t", now)),
+            "n": len(rows),
+            "pass": bool(rows) and all(oks),
+        }
+    return out
+
+
+def board_table(kind="cal"):
+    """콘솔용 결과 표. kind: cal | check | drift"""
+    title = {"cal": "자이로 0점 (bcal)",
+             "check": "잔여 바이어스 진단 (bcheck)",
+             "drift": "실측 표류 (bdrift)"}[kind]
+    lines = ["", f"  ── 보드 진단 결과: {title} ──"]
+    if kind == "cal":
+        lines.append(f"  {'센서':<13}{'흔들림':>9}{'이상치':>8}{'샘플':>7}  판정")
+    elif kind == "check":
+        lines.append(f"  {'센서':<13}{'흔들림':>9}{'바이어스':>10}"
+                     f"{'예상표류':>10}{'이상치':>8}  판정")
+    else:
+        lines.append(f"  {'센서':<13}{'표류':>12}  판정")
+
+    any_row = False
+    all_pass = True
+    now = time.time()
+    for name in ("SHOULDER_BOARD", "ARM_BOARD_L", "ARM_BOARD_R"):
+        st = board_state.get(name)
+        kr = BOARD_NAME_KR.get(name, name)
+        if st is None:
+            lines.append(f"  [{kr}] 보고 없음 (보드가 접속했는지, 펌웨어가 "
+                         f"v1.4 이상인지 확인)")
+            all_pass = False
+            continue
+        rows = st.get(kind) or []
+        if not rows:
+            lines.append(f"  [{kr}] {kind} 결과 없음")
+            all_pass = False
+            continue
+        age = now - st.get(kind + "_t", st.get("t", now))
+        lines.append(f"  [{kr}] fw {st.get('fw', '?')}  {age:.0f}초 전")
+        for e in rows:
+            any_row = True
+            ok, why = (cal_verdict(e) if kind == "cal"
+                       else diag_verdict(e, kind))
+            all_pass = all_pass and ok
+            mark = "통과" if ok else "불합격"
+            sid = e.get("id", "?")
+            if kind == "cal":
+                lines.append(
+                    f"    {sid:<11}{fmt(e.get('sd'), 3, '도/초'):>11}"
+                    f"{fmt(e.get('out'), 1, '%'):>10}{str(e.get('n', '-')):>7}"
+                    f"  {mark}" + (f"  ({', '.join(why)})" if why else ""))
+            elif kind == "check":
+                lines.append(
+                    f"    {sid:<11}{fmt(e.get('sd'), 3):>9}"
+                    f"{fmt(e.get('bias'), 3):>10}"
+                    f"{fmt(e.get('per_min'), 1, '도/분'):>12}"
+                    f"{fmt(e.get('out'), 1, '%'):>10}"
+                    f"  {mark}" + (f"  ({', '.join(why)})" if why else ""))
+            else:
+                lines.append(
+                    f"    {sid:<11}{fmt(e.get('drift'), 2, '도/분'):>14}"
+                    f"  {mark}" + (f"  ({', '.join(why)})" if why else ""))
+
+    if any_row:
+        lines.append("")
+        if all_pass:
+            lines.append("  => 전체 통과. 이제 서버 교정(zero -> fwd -> side -> "
+                         "diag)으로 넘어가세요.")
+        else:
+            lines.append("  => 불합격 항목이 있습니다. 보드를 완전히 정지시킨 뒤 "
+                         "다시 실행하세요.")
+            lines.append("     흔들림 초과 -> 움직이는 중. 이상치 초과 -> I2C 배선/"
+                         "풀업/접지 점검.")
+    return "\n".join(lines)
+
+
+def fmt(v, nd=2, unit=""):
+    if v is None:
+        return "-"
+    return f"{v:.{nd}f}{unit}"
+
+
+async def send_to_boards(payload):
+    """보드로 분류된 소켓에만 보낸다."""
+    msg = json.dumps(payload)
+    targets = [w for w in connected if w in board_sockets]
+    if not targets:
+        note("[거부] 접속한 보드가 없습니다. 보드가 켜져 있는지 확인하세요.")
+        return 0
+    await asyncio.gather(*(w.send(msg) for w in targets), return_exceptions=True)
+    return len(targets)
+
+
+async def board_command(kind, target_names, wait_sec):
+    """보드에 진단 명령을 보내고, 결과가 올 때까지 기다렸다가 표를 출력한다."""
+    cmd = {"cal": "boardcal", "check": "boardcheck", "drift": "boarddrift"}[kind]
+    who = "전체" if target_names is None else ", ".join(
+        BOARD_NAME_KR.get(n, n) for n in target_names)
+
+    # 이번 회차 결과만 보이도록 이전 것을 지운다
+    for name, st in board_state.items():
+        if target_names is None or name in target_names:
+            st.pop(kind, None)
+            st.pop(kind + "_t", None)
+
+    payload = {"cmd": cmd}
+    if target_names is not None and len(target_names) == 1:
+        payload["target"] = target_names[0]
+    else:
+        payload["target"] = "ALL"
+
+    n = await send_to_boards(payload)
+    if n == 0:
+        return
+
+    note(f"[{kind}] {who} 보드 {n}대에 명령을 보냈습니다. "
+         f"{wait_sec:.0f}초 동안 움직이지 마세요.\n"
+         f"       (측정 중에는 그 보드의 센서가 '끊김'으로 표시됩니다. 정상입니다)")
+
+    # 결과가 다 모이면 일찍 끝낸다
+    deadline = time.time() + wait_sec
+    while time.time() < deadline:
+        await asyncio.sleep(0.5)
+        want = (target_names if target_names is not None
+                else [nm for nm in board_state])
+        if want and all(board_state.get(nm, {}).get(kind) for nm in want):
+            break
+
+    note(board_table(kind))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1020,6 +1221,22 @@ def run_cmd(cmd, arg="", src="console"):
     head = parts[0] if parts else ""
     targets, consumed = pick_arms(head)
     rest = " ".join(parts[1:] if consumed else parts)
+
+    # ── [v6.1] 보드 진단 (비동기로 돌린다) ──
+    if cmd in ("bcal", "bcheck", "bdrift", "calboards"):
+        kind = {"bcal": "cal", "calboards": "cal",
+                "bcheck": "check", "bdrift": "drift"}[cmd]
+        wait = {"cal": BOARD_CAL_WAIT_SEC, "check": BOARD_CHECK_WAIT_SEC,
+                "drift": BOARD_DRIFT_WAIT_SEC}[kind]
+        names = board_pick(head)
+        asyncio.ensure_future(board_command(kind, names, wait))
+        return True
+
+    if cmd == "boards":
+        note(board_table(head.strip().lower()
+                         if head.strip().lower() in ("cal", "check", "drift")
+                         else "cal"))
+        return True
 
     if cmd == "arm":
         if consumed and len(targets) == 1:
@@ -1089,20 +1306,21 @@ HELP = ("명령 (뒤에 L / R / both 를 붙이면 그 팔에만 적용, 없으�
         "  anchormode [off|damped|full]   표류 보정 방식\n"
         "  learn fwd|diag|side   지금 자세를 그 자세의 기준각으로 저장\n"
         "  profile [scaled|abs|cal|<앞> <대각> <옆>]\n"
-        "  tune [SPAN_K=1.313 DIAG_HALF=0.42 BACK_MARGIN_DEG=25 ...]")
+        "  tune [SPAN_K=1.313 DIAG_HALF=0.42 ...]\n"
+        "\n"
+        "보드 진단 (뒤에 sh | L | R 을 붙이면 그 보드만, 없으면 전체)\n"
+        "  bcal    자이로 0점 재측정 + 통과 판정  (약 10초, 정지 필요)\n"
+        "  bcheck  오프셋 유지한 채 잔여 바이어스 진단 (약 8초)\n"
+        "  bdrift  30초씩 적분해 실제 표류량 측정 (약 70초)\n"
+        "  boards [cal|check|drift]   마지막 결과 다시 보기")
 
 
 def learn_ref(a, arg=""):
     """지금 취하고 있는 실제 자세의 az 를 그 자세의 기준각으로 저장한다.
 
     교정 캡처(az_side)는 늘 실제 녹화 자세보다 덜 벌어져 있고, 그 비율(SPAN_K)이
-    세션마다 다르다. 3세션 실측이 1.314 / 1.313 / 1.068 로 갈렸다. 즉 고정 계수로는
-    맞출 수 없다. 이 명령은 계수를 거치지 않고 실제 자세에서 직접 읽는다.
-
-      사용법: 그 자세를 잡고 멈춘 상태에서
-              learn fwd     /  learn diag  /  learn side
-              learn L side  처럼 팔을 지정할 수도 있다.
-    세 자세를 다 잡으면 자동으로 abs 모드로 바뀐다.
+    세션마다 다르다(실측 1.314 / 1.313 / 1.068). 고정 계수로는 맞출 수 없다.
+    이 명령은 계수를 거치지 않고 실제 자세에서 직접 읽는다.
     """
     key = {"fwd": "fwd", "forward": "fwd", "앞": "fwd",
            "diag": "diag", "대각": "diag",
@@ -1117,13 +1335,12 @@ def learn_ref(a, arg=""):
     vals = list(a.az_hist)
     if len(vals) < 10:
         note(f"[거부] {a.name} learn: 유효한 az 표본이 부족합니다 ({len(vals)}개). "
-             f"팔을 들어 자세를 잡은 채로 1초쯤 기다렸다가 다시 입력하세요.")
+             f"자세를 잡은 채로 1초쯤 기다렸다가 다시 입력하세요.")
         return False
     vals.sort()
     n = len(vals)
     med = vals[n // 2]
-    # 흔들림은 최소/최대 대신 10~90 백분위로 본다. 자세를 잡는 순간의
-    # 표본 한두 개가 섞여도 무너지지 않는다.
+    # 흔들림은 최소/최대 대신 10~90 백분위로 본다.
     spread = vals[int(0.9 * (n - 1))] - vals[int(0.1 * (n - 1))]
     if spread > 6.0:
         note(f"[거부] {a.name} learn: 최근 az 가 {spread:.0f}도나 흔들립니다. "
@@ -1134,10 +1351,12 @@ def learn_ref(a, arg=""):
     a.pose["mode"] = "abs"
     p = a.pose["abs"]
     b = a.bounds()
-    note(f"[ok] {a.name} '{key}' 기준각 = {med:.1f}도 (표본 {len(vals)}개, 흔들림 {spread:.1f}도)\n"
+    note(f"[ok] {a.name} '{key}' 기준각 = {med:.1f}도 "
+         f"(표본 {len(vals)}개, 흔들림 {spread:.1f}도)\n"
          f"       기준각 앞 {p['fwd']:.1f} / 대각 {p['diag']:.1f} / 옆 {p['side']:.1f}\n"
          f"       판정구간 앞 < {b[0]:.1f} < 대각 < {b[1]:.1f} < 옆")
     return True
+
 
 def set_profile(a, arg=""):
     """기준각 모드 보기/바꾸기."""
@@ -1200,6 +1419,13 @@ def print_status(targets=None):
     d = analyze()
     lines = [""]
     lines.append("  센서   " + sensor_line())
+    bs = d.get("boards") or {}
+    if bs:
+        parts = []
+        for nm, b in bs.items():
+            parts.append(f"{BOARD_NAME_KR.get(nm, nm)} "
+                         f"{'통과' if b['pass'] else '미통과'}({b['age']}초전)")
+        lines.append("  보드   " + "  ".join(parts))
     for side in (targets or ARM_ORDER):
         x = d["arms"][side]
         r = x["az_ref"]
@@ -1215,8 +1441,9 @@ def print_status(targets=None):
             f"옆 {r and r['side']} 도  (캡처 az_side {x['az_side']})",
             f"    판정구간 앞 < {x['bound_lo']} < 대각 < {x['bound_hi']} < 옆  "
             f"(뒤 {x['bound_back']} 미만 / {x['bound_far']} 초과)",
-            f"    앵커 {x['anchor_mode']}  보정 {x['drift']}도  관측 {x['anchor_n']}회  "
-            f"거부 {x['anchor_rejects']}회{'  [상한]' if x['anchor_capped'] else ''}",
+            f"    앵커 {x['anchor_mode']}  보정 {x['drift']}도  "
+            f"관측 {x['anchor_n']}회  거부 {x['anchor_rejects']}회"
+            f"{'  [상한]' if x['anchor_capped'] else ''}",
             f"    교정 {x['calib']}",
         ]
     note("\n".join(lines))
@@ -1225,13 +1452,43 @@ def print_status(targets=None):
 # ═══════════════════════════════════════════════════════════════
 #  통신
 # ═══════════════════════════════════════════════════════════════
-async def handler(ws):
+def handle_board_report(data):
+    """보드가 보낸 hello / diag 를 저장한다."""
+    name = data.get("board") or "?"
+    st = board_state.setdefault(name, {})
+    st["t"] = time.time()
+    if data.get("fw"):
+        st["fw"] = data["fw"]
+
+    typ = data.get("type")
+    if typ == "hello":
+        rows = data.get("cal") or []
+        st["cal"] = rows
+        st["cal_t"] = st["t"]
+        oks = [cal_verdict(e)[0] for e in rows]
+        mark = "통과" if rows and all(oks) else "확인 필요"
+        note(f"[보드] {BOARD_NAME_KR.get(name, name)} 자이로 0점 보고 "
+             f"({len(rows)}개 센서) -> {mark}")
+    elif typ == "diag":
+        kind = data.get("kind")
+        if kind in ("check", "drift"):
+            st[kind] = data.get("d") or []
+            st[kind + "_t"] = st["t"]
+            note(f"[보드] {BOARD_NAME_KR.get(name, name)} {kind} 결과 도착 "
+                 f"({len(st[kind])}개 센서)")
+
+
+async def handler(ws, path=None):
+    """[FIX-3 상당] path 기본값으로 websockets 10.x / 11+ 모두 대응."""
     connected.add(ws)
+    socket_since[ws] = time.time()
     try:
         async for message in ws:
             try:
                 data = json.loads(message)
             except ValueError:
+                continue
+            if not isinstance(data, dict):
                 continue
 
             if "id" in data and "qw" in data:
@@ -1240,11 +1497,27 @@ async def handler(ws):
                 latest[data["id"]] = data
                 note_sample(data["id"], t,
                             (data["qw"], data["qx"], data["qy"], data["qz"]))
+                # [v6.1] 쿼터니언을 보낸 소켓 = 보드
+                if ws not in subscribed:
+                    board_sockets.add(ws)
+                continue
+
+            if data.get("type") in ("hello", "diag"):
+                if ws not in subscribed:
+                    board_sockets.add(ws)
+                handle_board_report(data)
                 continue
 
             cmd = data.get("cmd")
             if not cmd:
                 continue
+
+            if cmd == "subscribe":
+                # 쿼터니언도 보내면서 방송도 받고 싶은 클라이언트용 탈출구
+                board_sockets.discard(ws)
+                subscribed.add(ws)
+                continue
+
             arm_tok = data.get("arm", "")
 
             if cmd == "zero" and not data.get("src"):
@@ -1259,21 +1532,39 @@ async def handler(ws):
 
             if cmd == "cal":
                 pose = data.get("pose", "forward")
-                run_cmd({"forward": "fwd", "side": "side", "diag": "diag"}[pose],
-                        arm_tok)
+                key = {"forward": "fwd", "side": "side", "diag": "diag"}.get(pose)
+                if key:
+                    run_cmd(key, arm_tok)
                 continue
 
             run_cmd(cmd, arm_tok, src="ui")
+    except Exception:
+        pass
     finally:
         connected.discard(ws)
+        board_sockets.discard(ws)
+        subscribed.discard(ws)
+        socket_since.pop(ws, None)
 
 
 async def broadcast_loop():
+    """[FIX-A] 보드에는 보내지 않는다. 보드 펌웨어는 TEXT 를 처리하지 않고,
+    센서 6개 프레임은 3KB 에 가까워 순수한 낭비다."""
     while True:
-        msg = json.dumps(analyze())
-        if connected:
-            await asyncio.gather(*(w.send(msg) for w in connected),
-                                 return_exceptions=True)
+        try:
+            msg = json.dumps(analyze())
+            now = time.time()
+            targets = [w for w in connected
+                       if w not in board_sockets
+                       and (w in subscribed
+                            or now - socket_since.get(w, 0) >= CLASSIFY_GRACE)]
+            if targets:
+                await asyncio.gather(*(w.send(msg) for w in targets),
+                                     return_exceptions=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
         await asyncio.sleep(0.1)
 
 
@@ -1287,16 +1578,28 @@ async def sensor_status_loop():
 async def console_loop():
     loop = asyncio.get_event_loop()
     while True:
-        line = (await loop.run_in_executor(None, sys.stdin.readline)).strip()
+        try:
+            line = (await loop.run_in_executor(None, sys.stdin.readline))
+        except (EOFError, OSError, ValueError):
+            # [FIX-C] 백그라운드 실행처럼 stdin 이 없으면 조용히 끈다.
+            note("[정보] stdin 이 없어 키보드 명령을 끕니다. (뷰어는 그대로 동작)")
+            return
+        if not line:
+            note("[정보] stdin 이 닫혔습니다. 키보드 명령을 끕니다.")
+            return
+        line = line.strip()
         if not line:
             continue
         cmd, _, arg = line.partition(" ")
-        if not run_cmd(cmd.lower(), arg.strip()):
-            note(HELP)
+        try:
+            if not run_cmd(cmd.lower(), arg.strip()):
+                note(HELP)
+        except Exception as e:
+            note(f"[오류] 명령 처리 실패 (서버는 계속 동작): {e}")
 
 
 async def main():
-    print("웨어러블 모션캡처 서버 v6.0 (양팔 / 6축)")
+    print("웨어러블 모션캡처 서버 v6.1 (양팔 / 6축 / 보드 원격 진단)")
     print(f"포트 {PORT}   센서 {', '.join(SENSOR_ORDER)}")
     if ARM_SENSORS["L"]["shoulder"] == ARM_SENSORS["R"]["shoulder"]:
         print("몸통 센서 1개를 양팔이 공유하는 설정입니다.")
@@ -1314,11 +1617,18 @@ async def main():
                   f"'load {side}' 로만 적용됩니다.")
         else:
             print(f"  {a.name}: 저장된 교정 없음")
-    print("\n순서(팔마다): zero -> fwd -> side -> diag, 그 뒤 팔 내리고 1초 정지")
+
+    print("\n권장 순서")
+    print("  1) bcal            보드 자이로 0점 (전부 통과할 때까지)")
+    print("  2) bdrift          실측 표류 확인 (분당 10도 아래면 통과)")
+    print("  3) zero -> fwd -> side -> diag   서버 교정 (팔마다)")
+    print("  4) 팔 내리고 1초 정지 (앵커)")
+    print()
     print(HELP + "\n")
 
     async with websockets.serve(handler, "0.0.0.0", PORT):
-        await asyncio.gather(broadcast_loop(), sensor_status_loop(), console_loop())
+        await asyncio.gather(broadcast_loop(), sensor_status_loop(),
+                             console_loop())
 
 
 if __name__ == "__main__":
