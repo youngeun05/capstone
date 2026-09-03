@@ -23,8 +23,8 @@
 ### 서버
 | 파일 | 설명 |
 |---|---|
-| `server_upperbody.py` | 상체 보드(왼팔·오른팔·어깨)에서 전송된 데이터를 취합·처리하는 서버 코드 |
-| `server_lowerbody.py` | 하체 보드(다리·척추)에서 전송된 데이터를 취합·처리하는 서버 코드 |
+| `server_up.py` | 상체 보드(왼팔·오른팔·어깨)에서 전송된 데이터를 취합·처리하는 서버 코드 |
+| `server_down.py` | 하체 보드(다리·척추)에서 전송된 데이터를 취합·처리하는 서버 코드 |
 
 ### 뷰어
 | 파일 | 설명 |
@@ -51,5 +51,5 @@
 ## 사용 방법
 
 1. `arm_left.ino`, `arm_right.ino`, `shoulder.ino`, `leg.ino`, `waist.ino`를 각 ESP32-S3 보드에 업로드합니다.
-2. `server_upperbody.py`, `server_lowerbody.py`를 실행하여 서버를 구동합니다.
+2. `server_up.py`, `server_down.py`를 실행하여 서버를 구동합니다.
 3. `pose_full.html`을 브라우저에서 열어 실시간 전신 자세를 확인합니다.
