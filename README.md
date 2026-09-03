@@ -38,7 +38,7 @@
   │        │        │             │        │
   └────────┴────────┘             └────────┘
            │                           │
-   server_upperbody.py        server_lowerbody.py
+     server_up.py               server_down.py
            │                           │
            └─────────────┬─────────────┘
                           │
