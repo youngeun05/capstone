@@ -17,8 +17,8 @@
 
 | 파일 | 설명 |
 |---|---|
-| `leg.ino` | 다리 ESP32-S3 보드 펌웨어 |
-| `waist.ino` | 척추(허리) ESP32-S3 보드 펌웨어 |
+| `sensor_leg_single.ino` | 다리 ESP32-S3 보드 펌웨어 |
+| `sensor_waist_dual.ino` | 척추(허리) ESP32-S3 보드 펌웨어 |
 
 ### 서버
 | 파일 | 설명 |
@@ -50,6 +50,6 @@
 
 ## 사용 방법
 
-1. `arm_left.ino`, `arm_right.ino`, `shoulder.ino`, `leg.ino`, `waist.ino`를 각 ESP32-S3 보드에 업로드합니다.
+1. `arm_left.ino`, `arm_right.ino`, `shoulder.ino`, `sensor_leg_single.ino`, `sensor_waist_dual.ino`를 각 ESP32-S3 보드에 업로드합니다.
 2. `server_up.py`, `server_down.py`를 실행하여 서버를 구동합니다.
 3. `pose_full.html`을 브라우저에서 열어 실시간 전신 자세를 확인합니다.
